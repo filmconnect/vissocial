@@ -1,0 +1,36 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vissocial
+      POSTGRES_PASSWORD: vissocial
+      POSTGRES_DB: vissocial
+    ports: ["5434:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7
+    ports: ["6380:6379"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes: [miniodata:/data]
+
+  policy:
+    build: ./services/policy
+    environment:
+      DATABASE_URL: postgresql://vissocial:vissocial@postgres:5432/vissocial
+    ports: ["8010:8010"]
+    depends_on: [postgres]
+
+volumes:
+  pgdata:
+  miniodata:
