@@ -1,31 +1,73 @@
 import { config } from "./config";
 import { log } from "./logger";
 
-const base = () => `https://graph.facebook.com/${config.meta.version}`;
+//const base = () => `https://graph.facebook.com/${config.meta.version}`;
+//const base = () => `https://graph.instagram.com/${config.meta.version}`;
+//const oauthBase = () => `https://api.instagram.com`;
+const base = () =>
+  `https://graph.instagram.com`;
+
+const oauthBase = () =>
+  `https://api.instagram.com`;
 
 export async function exchangeCodeForToken(code: string) {
-  const u = new URL(base()+"/oauth/access_token");
-  u.searchParams.set("client_id", config.meta.appId);
-  u.searchParams.set("client_secret", config.meta.appSecret);
-  u.searchParams.set("redirect_uri", config.meta.redirectUri);
-  u.searchParams.set("code", code);
-  const res = await fetch(u.toString());
+  const u = new URL(oauthBase() + '/oauth/access_token');
+
+  const body = new URLSearchParams({
+    client_id: config.meta.appId,
+    client_secret: config.meta.appSecret,
+    grant_type: 'authorization_code',
+    redirect_uri: config.meta.redirectUri,
+    code,
+  });
+
+  const res = await fetch(u.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
   const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
-  return data as { access_token: string; token_type: string; expires_in: number };
+
+  if (!res.ok) {
+    log.error('IG exchangeCodeForToken failed', data);
+    throw new Error(JSON.stringify(data));
+  }
+
+  return data as {
+    access_token: string;
+    user_id: string;
+  };
 }
 
+
+
+
 export async function getLongLivedToken(shortToken: string) {
-  const u = new URL(base()+"/oauth/access_token");
-  u.searchParams.set("grant_type", "fb_exchange_token");
-  u.searchParams.set("client_id", config.meta.appId);
-  u.searchParams.set("client_secret", config.meta.appSecret);
-  u.searchParams.set("fb_exchange_token", shortToken);
+  const u = new URL(base() + '/access_token');
+
+  u.searchParams.set('grant_type', 'ig_exchange_token');
+  u.searchParams.set('client_secret', config.meta.appSecret);
+  u.searchParams.set('access_token', shortToken);
+
   const res = await fetch(u.toString());
   const data = await res.json();
-  if (!res.ok) throw new Error(JSON.stringify(data));
-  return data as { access_token: string; token_type: string; expires_in: number };
+
+  if (!res.ok) {
+    log.error('IG getLongLivedToken failed', data);
+    throw new Error(JSON.stringify(data));
+  }
+
+  return data as {
+    access_token: string;
+    expires_in: number;
+  };
 }
+
+
+
 
 export async function graphGET(path: string, accessToken: string, params: Record<string,string> = {}) {
   const u = new URL(base()+path);
@@ -59,6 +101,13 @@ export async function discoverInstagramAccount(accessToken: string) {
   if (!ig) return { fb_page_id: page.id, ig_user_id: null };
   return { fb_page_id: page.id, ig_user_id: ig };
 }
+
+export async function getInstagramUser(accessToken: string) {
+  return graphGET("/me", accessToken, {
+    fields: "id,username,account_type"
+  });
+}
+
 
 // Publish: /{ig-user-id}/media then /{ig-user-id}/media_publish citeturn0search0
 export async function createMediaContainer(igUserId: string, accessToken: string, opts: { image_url?: string; video_url?: string; caption?: string; media_type?: string; is_carousel_item?: boolean }) {
