@@ -25,5 +25,10 @@ export async function GET(req: Request) {
   // enqueue ingest from IG (media + optional products detection later)
   await qIngest.add("instagram.ingest", { project_id: PROJECT_ID });
 
-  return NextResponse.redirect("/chat");
+  //return NextResponse.redirect("/chat");
+  const origin = new URL(req.url).origin;
+
+return NextResponse.redirect(
+  new URL("/settings?ig=connected", origin)
+);
 }
