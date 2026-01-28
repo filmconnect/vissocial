@@ -15,6 +15,7 @@ async function ensureProject() {
 export async function POST() {
   await ensureProject();
   const id = "chat_" + uuid();
+  log("api:chat", "new session created", { session_id: id });
   await q(`INSERT INTO chat_sessions(id, project_id, state) VALUES ($1,$2,$3)`, [id, PROJECT_ID, JSON.stringify({ step: "welcome" })]);
 
   const m1 = "msg_" + uuid();
