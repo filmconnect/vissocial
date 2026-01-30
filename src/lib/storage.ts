@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+// src/lib/storage.ts
+import { S3Client, PutObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
 import { config } from "./config";
 
 const s3 = new S3Client({
@@ -8,7 +9,23 @@ const s3 = new S3Client({
   forcePathStyle: true
 });
 
-export async function putObject(key:string, body: Buffer, contentType: string) {
+export async function ensureBucket() {
+  try {
+    await s3.send(new HeadBucketCommand({ Bucket: config.s3.bucket }));
+    console.log("✓ S3 bucket exists:", config.s3.bucket);
+  } catch (err) {
+    console.log("📦 Creating S3 bucket:", config.s3.bucket);
+    try {
+      await s3.send(new CreateBucketCommand({ Bucket: config.s3.bucket }));
+      console.log("✓ Bucket created successfully");
+    } catch (createErr: any) {
+      console.error("❌ Failed to create bucket:", createErr.message);
+      throw createErr;
+    }
+  }
+}
+
+export async function putObject(key: string, body: Buffer, contentType: string) {
   await s3.send(new PutObjectCommand({
     Bucket: config.s3.bucket,
     Key: key,
@@ -18,8 +35,8 @@ export async function putObject(key:string, body: Buffer, contentType: string) {
   return `${config.s3.publicBase}/${key}`;
 }
 
-export async function downloadToBuffer(url:string): Promise<Buffer> {
+export async function downloadToBuffer(url: string): Promise<Buffer> {
   const res = await fetch(url);
-  if(!res.ok) throw new Error(`download failed ${res.status}`);
+  if (!res.ok) throw new Error(`download failed ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }
