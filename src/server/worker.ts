@@ -159,7 +159,14 @@ new Worker(
       throw e;
     }
   },
-  { connection }
+  { 
+    connection,
+    concurrency: 2, // ← PROMIJENJENO sa 1 na 2
+    limiter: {     // ← DODANO
+      max: 10,
+      duration: 60000
+    }
+  }
 );
 
 // Metrics Worker
@@ -267,13 +274,27 @@ new Worker(
 );
 
 // ============================================================
-// SCHEDULE POLLING
+// SCHEDULE POLLING (OPTIMIZED)
 // ============================================================
 
 (async () => {
   try {
-    log("worker:scheduler", "schedule.tick registered");
-    await qPublish.add("schedule.tick", {}, { repeat: { every: 60_000 } });
+    log("worker:scheduler", "schedule.tick setup start");
+    
+    // ✅ PROMIJENI SA 60s NA 5min
+    await qPublish.add(
+      "schedule.tick", 
+      { project_id: "proj_local" }, // ← DODAJ project_id
+      { 
+        repeat: { 
+          every: 5 * 60 * 1000 // ← 5 minuta (300,000 ms)
+        },
+        jobId: "schedule-tick-repeating" // ← Fiksni ID
+      }
+    );
+    
+    log("worker:scheduler", "schedule.tick registered - every 5 minutes");
+    
   } catch (e: any) {
     log("worker:scheduler", "schedule.tick registration failed", {
       error: e.message
