@@ -165,14 +165,17 @@ function generateSmartWelcome(state: SystemState): WelcomeResult {
 // ============================================================
 
 async function ensureProject() {
-  const rows = await q<any>(`SELECT id FROM projects WHERE id=$1`, [PROJECT_ID]);
-  if (!rows[0]) {
-    await q(`INSERT INTO projects(id, name) VALUES ($1,'Local Project')`, [PROJECT_ID]);
-    await q(
-      `INSERT INTO brand_profiles(project_id, language, profile) VALUES ($1,'hr','{}'::jsonb) ON CONFLICT DO NOTHING`,
-      [PROJECT_ID]
-    );
-  }
+  await q(
+    `INSERT INTO projects(id, name) VALUES ($1, 'Local Project') 
+     ON CONFLICT (id) DO NOTHING`,
+    [PROJECT_ID]
+  );
+  await q(
+    `INSERT INTO brand_profiles(project_id, language, profile) 
+     VALUES ($1, 'hr', '{}'::jsonb) 
+     ON CONFLICT (project_id, language) DO NOTHING`,
+    [PROJECT_ID]
+  );
 }
 
 // ============================================================
@@ -263,50 +266,6 @@ export async function GET(req: Request) {
     );
 
     const sessionState = session?.state || {};
-    const originalState = sessionState.system_state_at_start;
-
-    // Check if significant state changes occurred
-    let stateChangeMessage = null;
-    
-    if (originalState) {
-      // IG just connected?
-      if (!originalState.ig_connected && currentState.ig_connected) {
-        stateChangeMessage = {
-          text: `🎉 **Instagram uspješno povezan!**\n\nSada ću povući tvoje objave i analizirati stil. U međuvremenu, nastavljamo s pitanjima...`,
-          trigger: "ig_connected",
-        };
-        
-        // Update session state
-        await q(
-          `UPDATE chat_sessions SET state = $1 WHERE id = $2`,
-          [JSON.stringify({ 
-            ...sessionState, 
-            step: sessionState.step === "init" ? "profile_type" : sessionState.step,
-            system_state_at_start: currentState 
-          }), session_id]
-        );
-      }
-      
-      // New products detected?
-      if (originalState.pending_products === 0 && currentState.pending_products > 0) {
-        stateChangeMessage = {
-          text: `🔔 **Analiza gotova!** Pronašao sam ${currentState.pending_products} proizvoda za potvrdu.`,
-          trigger: "products_detected",
-        };
-      }
-      
-      // Analysis completed?
-      if (originalState.media_analyzed < originalState.media_count && 
-          currentState.media_analyzed >= currentState.media_count && 
-          currentState.media_count > 0) {
-        if (!stateChangeMessage) {
-          stateChangeMessage = {
-            text: `✅ **Analiza slika završena!** (${currentState.media_analyzed}/${currentState.media_count})`,
-            trigger: "analysis_complete",
-          };
-        }
-      }
-    }
 
     // Get messages
     const messages = await q<any>(
@@ -320,29 +279,6 @@ export async function GET(req: Request) {
       text: m.text,
       chips: m.meta?.chips,
     }));
-
-    // If there's a state change, inject a system message
-    if (stateChangeMessage) {
-      // Add notification message to DB
-      const msgId = "msg_" + uuid();
-      const notifChips = stateChangeMessage.trigger === "ig_connected" 
-        ? ONBOARDING_QUESTIONS.profile_type.chips
-        : stateChangeMessage.trigger === "products_detected"
-        ? [chip.suggestion("Prikaži proizvode"), chip.suggestion("Potvrdi sve")]
-        : [chip.suggestion("Status")];
-      
-      await q(
-        `INSERT INTO chat_messages(id, session_id, role, text, meta) VALUES ($1,$2,'assistant',$3,$4)`,
-        [msgId, session_id, stateChangeMessage.text, JSON.stringify({ chips: notifChips })]
-      );
-      
-      mapped.push({
-        id: msgId,
-        role: "assistant",
-        text: stateChangeMessage.text,
-        chips: notifChips,
-      });
-    }
 
     return NextResponse.json({
       session_id,

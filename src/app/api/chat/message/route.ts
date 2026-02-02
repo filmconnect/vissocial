@@ -416,6 +416,79 @@ async function handleCommand(
     };
   }
 
+  // WEB SEARCH / SCRAPE
+  if (/\b(pretrazi|pretra[zž]i|search|scrape).*(web|stranicu|site)/i.test(norm) ||
+      /\b(web|stranicu|site).*(pretrazi|pretra[zž]i|search)/i.test(norm)) {
+    return {
+      handled: true,
+      response: {
+        text: `Koja je URL adresa tvoje web stranice?\n\n_(Npr. "www.skolskaknjiga.hr" ili samo "skolskaknjiga.hr")_`,
+        chips: [],
+      },
+    };
+  }
+
+  // DIRECT URL INPUT (detect URLs in message)
+  const urlMatch = norm.match(/(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,})(?:\/[^\s]*)?/i);
+  if (urlMatch && sessionState.step !== "web_url") {
+    // User entered a URL directly - trigger web scrape
+    let url = text.match(/(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)*/i)?.[0] || urlMatch[0];
+    if (!url.startsWith("http")) {
+      url = "https://" + url;
+    }
+
+    try {
+      const scrapeResponse = await fetch(`${process.env.APP_URL || 'http://localhost:3000'}/api/scrape/website`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+
+      const scrapeResult = await scrapeResponse.json();
+
+      if (scrapeResult.success) {
+        await updateSessionState(session_id, {
+          website_url: url,
+          brand_name: scrapeResult.data.brand_name || sessionState.brand_name,
+        });
+
+        let responseText = `🌐 **Pretražio sam ${url}!**\n\n`;
+        
+        if (scrapeResult.data.brand_name) {
+          responseText += `📋 Brend: **${scrapeResult.data.brand_name}**\n`;
+        }
+        if (scrapeResult.data.products_found > 0) {
+          responseText += `📦 Pronašao sam ${scrapeResult.data.products_found} novih proizvoda za potvrdu\n`;
+        }
+        if (scrapeResult.data.logo_url) {
+          responseText += `🖼️ Logo pronađen i spremljen\n`;
+        }
+        
+        const updatedState = await getSystemState();
+        const chips: ChatChip[] = [];
+        
+        if (updatedState.pending_products > 0) {
+          chips.push(chip.suggestion("Prikaži proizvode"));
+        }
+        chips.push(chip.suggestion("Status"));
+        
+        return {
+          handled: true,
+          response: { text: responseText, chips },
+        };
+      }
+    } catch (error: any) {
+      log("chat:web_scrape", "direct URL scrape failed", { error: error.message, url });
+      return {
+        handled: true,
+        response: {
+          text: `Pokušao sam pretražiti ${url}, ali nisam uspio: ${error.message}`,
+          chips: [chip.suggestion("Status"), chip.suggestion("Pomoć")],
+        },
+      };
+    }
+  }
+
   // HELP
   if (/\b(help|pomoc|pomozi|kako)\b/i.test(norm)) {
     return {
@@ -675,18 +748,64 @@ async function handleOnboarding(
       url = "https://" + url;
     }
 
-    await updateSessionState(session_id, {
-      website_url: url,
-      step: "profile_type",
-      answered_questions: [...answeredQuestions, "website_url"],
-    });
+    // Trigger web scrape
+    try {
+      const scrapeResponse = await fetch(`${process.env.APP_URL || 'http://localhost:3000'}/api/scrape/website`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
 
-    // TODO: Faza 3.2 će dodati stvarni web scrape
-    return {
-      text: `Spremio sam **${url}**! 🌐\n\n(Web pretraga dolazi uskoro u sljedećoj verziji)\n\nKoji tip profila te najbolje opisuje?`,
-      chips: ONBOARDING_QUESTIONS.profile_type.chips,
-      newStep: "profile_type",
-    };
+      const scrapeResult = await scrapeResponse.json();
+
+      if (scrapeResult.success) {
+        await updateSessionState(session_id, {
+          website_url: url,
+          brand_name: scrapeResult.data.brand_name,
+          step: "profile_type",
+          answered_questions: [...answeredQuestions, "website_url", "brand_name"],
+        });
+
+        let responseText = `🌐 **Web pretraga završena!**\n\n`;
+        
+        if (scrapeResult.data.brand_name) {
+          responseText += `📋 Brend: **${scrapeResult.data.brand_name}**\n`;
+        }
+        if (scrapeResult.data.about) {
+          responseText += `📝 ${scrapeResult.data.about.slice(0, 100)}...\n`;
+        }
+        if (scrapeResult.data.products_found > 0) {
+          responseText += `📦 Pronašao sam ${scrapeResult.data.products_found} proizvoda\n`;
+        }
+        if (scrapeResult.data.logo_url) {
+          responseText += `🖼️ Logo pronađen\n`;
+        }
+        
+        responseText += `\nKoji tip profila te najbolje opisuje?`;
+
+        return {
+          text: responseText,
+          chips: ONBOARDING_QUESTIONS.profile_type.chips,
+          newStep: "profile_type",
+        };
+      } else {
+        throw new Error(scrapeResult.error);
+      }
+    } catch (error: any) {
+      log("chat:web_scrape", "scrape failed", { error: error.message, url });
+      
+      await updateSessionState(session_id, {
+        website_url: url,
+        step: "profile_type",
+        answered_questions: [...answeredQuestions, "website_url"],
+      });
+
+      return {
+        text: `Spremio sam URL **${url}**, ali nisam mogao automatski izvući podatke (${error.message}).\n\nNema veze - nastavljamo!\n\nKoji tip profila te najbolje opisuje?`,
+        chips: ONBOARDING_QUESTIONS.profile_type.chips,
+        newStep: "profile_type",
+      };
+    }
   }
 
   // PROFILE TYPE - Required question
@@ -788,8 +907,8 @@ async function handleOnboarding(
     // After required questions, check if we should ask about products
     const updatedState = await getSystemState();
 
-    if (updatedState.pending_products > 0) {
-      await updateSessionState(session_id, { step: "confirm_products" });
+    if (updatedState.pending_products > 0 && !sessionState.products_notified) {
+      await updateSessionState(session_id, { step: "confirm_products", products_notified: true });
       return {
         text: `Odlično! Cilj: **${goal}** 🎯\n\nUsput, pronašao sam **${updatedState.pending_products} proizvoda** iz tvojih objava. Želiš li ih pregledati i potvrditi?`,
         chips: [
@@ -882,14 +1001,17 @@ async function handleOnboarding(
     // Check system state - maybe job finished
     const updatedState = await getSystemState();
 
-    // If products appeared, interrupt and ask
-    if (updatedState.pending_products > 0 && !answeredQuestions.includes("products_shown")) {
+    // If products appeared AND we haven't notified yet, interrupt and ask
+    if (updatedState.pending_products > 0 && 
+        !answeredQuestions.includes("products_notified") &&
+        !sessionState.products_notified) {
       await updateSessionState(session_id, {
         step: "confirm_products",
-        answered_questions: [...answeredQuestions, currentQuestion?.id, "products_shown"].filter(Boolean),
+        products_notified: true,
+        answered_questions: [...answeredQuestions, currentQuestion?.id, "products_notified"].filter(Boolean),
       });
       return {
-        text: `🔔 Analiza je otkrila **${updatedState.pending_products} proizvoda**!\n\nŽeliš li ih pregledati?`,
+        text: `🔔 **Analiza otkrila proizvode!** Pronašao sam **${updatedState.pending_products} proizvoda**.\n\nŽeliš li ih pregledati?`,
         chips: [
           chip.suggestion("Prikaži proizvode"),
           chip.suggestion("Potvrdi sve"),

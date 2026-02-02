@@ -56,16 +56,23 @@ function Bubble({
 
       {chips.length > 0 && isAssistant && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {chips.map((c, idx) => (
-            <ChatChipButton
-              key={`${m.id}-chip-${idx}`}
-              chip={c}
-              sessionId={sessionId}
-              onSend={onSend}
-              onRefresh={onRefresh}
-              disabled={!isLatest}
-            />
-          ))}
+          {chips.map((c, idx) => {
+            // Product confirm chips are always enabled (user can confirm multiple)
+            // Other chips are only enabled on latest message
+            const isProductChip = c.type === "product_confirm";
+            const shouldDisable = !isLatest && !isProductChip;
+            
+            return (
+              <ChatChipButton
+                key={`${m.id}-chip-${idx}`}
+                chip={c}
+                sessionId={sessionId}
+                onSend={onSend}
+                onRefresh={onRefresh}
+                disabled={shouldDisable}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -183,18 +190,49 @@ export default function ChatPage() {
     }
   }, []);
 
-  // Polling for job updates (every 10s if jobs active)
+  // Polling for notifications (every 5s)
   useEffect(() => {
-    if (!systemState?.active_jobs || systemState.active_jobs === 0) return;
+    if (!sessionId) return;
 
-    const interval = setInterval(() => {
-      if (sessionId) {
-        loadMessages(sessionId, true); // silent refresh
+    const pollNotifications = async () => {
+      try {
+        const res = await fetch(`/api/chat/notifications?session_id=${sessionId}`);
+        const data = await res.json();
+        
+        if (data.notifications && data.notifications.length > 0) {
+          // Append notification messages to chat
+          setMsgs((prev) => {
+            // Avoid duplicates
+            const existingIds = new Set(prev.map(m => m.id));
+            const newMsgs = data.notifications.filter((n: any) => !existingIds.has(n.id));
+            return [...prev, ...newMsgs];
+          });
+          
+          // Also refresh system state
+          loadMessages(sessionId, true);
+        }
+      } catch (err) {
+        // Silent fail for polling
       }
-    }, 10000);
+    };
 
-    return () => clearInterval(interval);
-  }, [systemState?.active_jobs, sessionId]);
+    // Initial poll after 2 seconds
+    const initialTimeout = setTimeout(pollNotifications, 2000);
+    
+    // Then poll every 5 seconds
+    const interval = setInterval(pollNotifications, 5000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
+  // Polling for job updates (every 10s if jobs active) - REMOVED, replaced by notifications
+  // useEffect(() => {
+  //   if (!systemState?.active_jobs || systemState.active_jobs === 0) return;
+  //   ...
+  // }, [systemState?.active_jobs, sessionId]);
 
   async function createSession() {
     try {

@@ -168,10 +168,15 @@ export function ChatChipButton({
 
   // Determine display label
   let displayLabel = chip.label;
-  if (isLoading) {
-    displayLabel = "⏳ " + chip.label.replace(/^[✓✗]\s*/, "");
-  } else if (isConfirmed) {
-    displayLabel = "✅ " + chip.label.replace(/^[✓✗]\s*/, "");
+  if (chip.type === "product_confirm") {
+    if (isLoading) {
+      displayLabel = "⏳ " + chip.label;
+    } else if (isConfirmed) {
+      displayLabel = "✅ " + chip.label;
+    } else {
+      // Not yet confirmed - show action icon
+      displayLabel = (chip.action === "confirm" ? "☐ " : "✗ ") + chip.label;
+    }
   }
 
   return (

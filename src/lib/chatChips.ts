@@ -48,14 +48,14 @@ export const chip = {
 
   productConfirm: (productName: string, productId: string): ChatChip => ({
     type: "product_confirm",
-    label: `✓ ${productName}`,
+    label: productName,
     productId,
     action: "confirm",
   }),
 
   productReject: (productName: string, productId: string): ChatChip => ({
     type: "product_confirm",
-    label: `✗ ${productName}`,
+    label: productName,
     productId,
     action: "reject",
   }),

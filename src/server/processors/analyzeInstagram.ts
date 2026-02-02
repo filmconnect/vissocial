@@ -1,9 +1,9 @@
 // ============================================================
-// ANALYZE INSTAGRAM PROCESSOR
+// ANALYZE INSTAGRAM PROCESSOR (PATCHED WITH NOTIFICATIONS)
 // ============================================================
 // Analizira pojedinačnu Instagram sliku s GPT-4 Vision.
 // Sprema rezultate u instagram_analyses i detected_products.
-// Triggera brand rebuild kad su sve analize završene.
+// UPDATED: Šalje notifikaciju kad su sve analize završene.
 // ============================================================
 
 import { q } from "@/lib/db";
@@ -12,6 +12,7 @@ import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
 import { config } from "@/lib/config";
 import { qBrandRebuild } from "@/lib/jobs";
+import { notify } from "@/lib/notifications";
 
 // ============================================================
 // TYPES
@@ -22,7 +23,7 @@ export interface AnalyzeInstagramInput {
   project_id: string;
   image_url: string;
   caption?: string;
-  rebuild_event_id?: string; // Za tracking napretka
+  rebuild_event_id?: string;
 }
 
 export interface AnalyzeInstagramResult {
@@ -31,6 +32,82 @@ export interface AnalyzeInstagramResult {
   products_found: number;
   analysis_id?: string;
   error?: string;
+}
+
+// ============================================================
+// HELPER: Check if all analyses are complete
+// ============================================================
+
+async function checkAndNotifyCompletion(project_id: string): Promise<boolean> {
+  const [progress] = await q<any>(
+    `SELECT 
+       COUNT(*) FILTER (WHERE ia.id IS NOT NULL) as analyzed,
+       COUNT(*) as total
+     FROM assets a
+     LEFT JOIN instagram_analyses ia ON ia.asset_id = a.id
+     WHERE a.project_id = $1 AND a.source = 'instagram'`,
+    [project_id]
+  );
+
+  const analyzed = parseInt(progress.analyzed || "0");
+  const total = parseInt(progress.total || "0");
+  const isComplete = total > 0 && analyzed >= total;
+
+  if (isComplete) {
+    // Count pending products
+    const [productCount] = await q<any>(
+      `SELECT COUNT(*) as count FROM detected_products 
+       WHERE project_id = $1 AND status = 'pending'`,
+      [project_id]
+    );
+
+    const productsFound = parseInt(productCount?.count || "0");
+
+    // Send notification
+    await notify.analysisComplete(project_id, productsFound, total);
+
+    log("analyzeInstagram", "all_complete_notification_sent", {
+      project_id,
+      total_analyzed: analyzed,
+      products_found: productsFound
+    });
+
+    return true;
+  }
+
+  return false;
+}
+
+// ============================================================
+// HELPER: Increment rebuild event counter
+// ============================================================
+
+async function incrementAnalysisCounter(rebuild_event_id: string, project_id: string) {
+  await q(
+    `UPDATE brand_rebuild_events 
+     SET analyses_completed = COALESCE(analyses_completed, 0) + 1
+     WHERE id = $1`,
+    [rebuild_event_id]
+  );
+
+  // Check if rebuild should trigger
+  const [event] = await q<any>(
+    `SELECT total_expected, analyses_completed FROM brand_rebuild_events WHERE id = $1`,
+    [rebuild_event_id]
+  );
+
+  if (event && event.analyses_completed >= event.total_expected) {
+    log("analyzeInstagram", "all_analyses_complete_triggering_rebuild", {
+      rebuild_event_id,
+      project_id
+    });
+    
+    await qBrandRebuild.add("brand.rebuild", {
+      project_id,
+      trigger: "ingest_complete",
+      rebuild_event_id
+    });
+  }
 }
 
 // ============================================================
@@ -63,10 +140,12 @@ export async function analyzeInstagram(
     if (existingAnalysis.length > 0) {
       log("analyzeInstagram", "already_analyzed", { asset_id });
       
-      // Ipak updateaj progress ako postoji rebuild_event_id
       if (rebuild_event_id) {
         await incrementAnalysisCounter(rebuild_event_id, project_id);
       }
+      
+      // Check if this was the last one
+      await checkAndNotifyCompletion(project_id);
       
       return {
         success: true,
@@ -96,99 +175,90 @@ export async function analyzeInstagram(
     const analysisId = "ana_" + uuid();
     
     await q(
-      `INSERT INTO instagram_analyses (id, asset_id, analysis, model_version, analyzed_at)
-       VALUES ($1, $2, $3, $4, NOW())`,
-      [analysisId, asset_id, JSON.stringify(analysis), "gpt-4o"]
+      `INSERT INTO instagram_analyses 
+       (id, asset_id, project_id, visual_style, products, caption_analysis, content_classification, raw_response)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        analysisId,
+        asset_id,
+        project_id,
+        JSON.stringify(analysis.visual_style),
+        JSON.stringify(analysis.products),
+        JSON.stringify(analysis.caption_analysis),
+        JSON.stringify(analysis.content_classification),
+        JSON.stringify(analysis)
+      ]
     );
-
-    log("analyzeInstagram", "analysis_saved", { analysis_id: analysisId });
 
     // =========================================================
     // 4. Spremi detektirane proizvode
     // =========================================================
-    let productsInserted = 0;
+    let productsFound = 0;
 
     for (const product of analysis.products) {
       const productId = "det_" + uuid();
       
       try {
         await q(
-          `INSERT INTO detected_products (
-            id, project_id, asset_id, product_name, category,
-            visual_features, prominence, confidence, status
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
-          ON CONFLICT (asset_id, product_name) 
-          DO UPDATE SET 
-            frequency = detected_products.frequency + 1,
-            last_seen_at = NOW(),
-            confidence = GREATEST(detected_products.confidence, EXCLUDED.confidence),
-            visual_features = COALESCE(
-              detected_products.visual_features,
-              EXCLUDED.visual_features
-            )`,
+          `INSERT INTO detected_products 
+           (id, project_id, asset_id, analysis_id, product_name, category, confidence, visual_features, source, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'instagram_vision', 'pending')
+           ON CONFLICT DO NOTHING`,
           [
             productId,
             project_id,
             asset_id,
+            analysisId,
             product.name,
             product.category,
-            JSON.stringify(product.visual_features),
-            product.prominence,
-            product.confidence
+            product.confidence,
+            JSON.stringify(product.visual_features || [])
           ]
         );
-        productsInserted++;
-      } catch (productError: any) {
-        log("analyzeInstagram", "product_insert_error", {
+        productsFound++;
+      } catch (e: any) {
+        log("analyzeInstagram", "product_insert_error", { 
           product_name: product.name,
-          error: productError.message
+          error: e.message 
         });
       }
     }
 
-    log("analyzeInstagram", "products_saved", {
-      asset_id,
-      products_inserted: productsInserted,
-      products_found: analysis.products.length
-    });
-
     // =========================================================
-    // 5. Update napredak i provjeri treba li rebuild
+    // 5. Update rebuild event counter
     // =========================================================
     if (rebuild_event_id) {
       await incrementAnalysisCounter(rebuild_event_id, project_id);
     }
 
-    const duration = Date.now() - startTime;
-    
+    // =========================================================
+    // 6. Check if all analyses complete & notify
+    // =========================================================
+    await checkAndNotifyCompletion(project_id);
+
     log("analyzeInstagram", "complete", {
       asset_id,
       analysis_id: analysisId,
-      products_found: analysis.products.length,
-      duration_ms: duration
+      products_found: productsFound,
+      duration_ms: Date.now() - startTime
     });
 
     return {
       success: true,
       asset_id,
-      products_found: analysis.products.length,
+      products_found: productsFound,
       analysis_id: analysisId
     };
 
   } catch (error: any) {
-    const duration = Date.now() - startTime;
-    
     log("analyzeInstagram", "error", {
       asset_id,
       error: error.message,
-      duration_ms: duration
+      stack: error.stack
     });
 
-    // Ipak updateaj counter da ne blokira rebuild
-    if (rebuild_event_id) {
-      await incrementAnalysisCounter(rebuild_event_id, project_id);
-    }
+    // Notify about failure
+    await notify.jobFailed(project_id, "analyze.instagram", error.message);
 
     return {
       success: false,
@@ -197,177 +267,4 @@ export async function analyzeInstagram(
       error: error.message
     };
   }
-}
-
-// ============================================================
-// HELPER: Increment Analysis Counter
-// ============================================================
-
-async function incrementAnalysisCounter(
-  eventId: string,
-  projectId: string
-): Promise<void> {
-  try {
-    // Increment counter
-    await q(
-      `UPDATE brand_rebuild_events 
-       SET analyses_completed = analyses_completed + 1
-       WHERE id = $1`,
-      [eventId]
-    );
-
-    // Provjeri je li sve gotovo
-    const event = await q<any>(
-      `SELECT id, total_expected, analyses_completed, status
-       FROM brand_rebuild_events
-       WHERE id = $1`,
-      [eventId]
-    );
-
-    if (event.length > 0) {
-      const e = event[0];
-      
-      log("analyzeInstagram", "progress_update", {
-        event_id: eventId,
-        completed: e.analyses_completed,
-        total: e.total_expected,
-        status: e.status
-      });
-
-      // Ako su sve analize gotove i status je 'ready', pokreni rebuild
-      // (trigger u bazi automatski stavlja status='ready' kad analyses_completed >= total_expected)
-      if (e.status === "ready") {
-        log("analyzeInstagram", "triggering_brand_rebuild", {
-          event_id: eventId,
-          project_id: projectId
-        });
-
-        await qBrandRebuild.add("brand.rebuild", {
-          project_id: projectId,
-          event_id: eventId,
-          trigger: "analysis_complete"
-        });
-      }
-    }
-  } catch (error: any) {
-    log("analyzeInstagram", "counter_update_error", {
-      event_id: eventId,
-      error: error.message
-    });
-  }
-}
-
-// ============================================================
-// BATCH PROCESSOR (za bulk analizu)
-// ============================================================
-
-export interface AnalyzeBatchInput {
-  project_id: string;
-  assets: Array<{
-    asset_id: string;
-    image_url: string;
-    caption?: string;
-  }>;
-}
-
-export async function analyzeInstagramBatch(
-  data: AnalyzeBatchInput
-): Promise<{
-  success: boolean;
-  total: number;
-  completed: number;
-  failed: number;
-  event_id: string;
-}> {
-  const { project_id, assets } = data;
-  
-  log("analyzeInstagramBatch", "start", {
-    project_id,
-    total_assets: assets.length
-  });
-
-  // Kreiraj rebuild event za tracking
-  const eventId = "evt_" + uuid();
-  
-  await q(
-    `INSERT INTO brand_rebuild_events (
-      id, project_id, trigger_type, status, 
-      total_expected, analyses_completed
-    )
-    VALUES ($1, $2, 'instagram_ingest', 'analyzing', $3, 0)`,
-    [eventId, project_id, assets.length]
-  );
-
-  let completed = 0;
-  let failed = 0;
-
-  // Procesiraj jedan po jedan (queue će paralelizirati ako treba)
-  for (const asset of assets) {
-    const result = await analyzeInstagram({
-      asset_id: asset.asset_id,
-      project_id,
-      image_url: asset.image_url,
-      caption: asset.caption,
-      rebuild_event_id: eventId
-    });
-
-    if (result.success) {
-      completed++;
-    } else {
-      failed++;
-    }
-  }
-
-  log("analyzeInstagramBatch", "complete", {
-    project_id,
-    event_id: eventId,
-    total: assets.length,
-    completed,
-    failed
-  });
-
-  return {
-    success: failed === 0,
-    total: assets.length,
-    completed,
-    failed,
-    event_id: eventId
-  };
-}
-
-// ============================================================
-// REANALYZE (za ručni re-run)
-// ============================================================
-
-export async function reanalyzeAsset(asset_id: string): Promise<AnalyzeInstagramResult> {
-  // Dohvati asset podatke
-  const asset = await q<any>(
-    `SELECT a.id, a.project_id, a.url, a.metadata
-     FROM assets a
-     WHERE a.id = $1`,
-    [asset_id]
-  );
-
-  if (asset.length === 0) {
-    return {
-      success: false,
-      asset_id,
-      products_found: 0,
-      error: "Asset not found"
-    };
-  }
-
-  // Obriši staru analizu
-  await q(`DELETE FROM instagram_analyses WHERE asset_id = $1`, [asset_id]);
-  await q(`DELETE FROM detected_products WHERE asset_id = $1`, [asset_id]);
-
-  // Pokreni novu analizu
-  const caption = asset[0].metadata?.caption;
-  
-  return analyzeInstagram({
-    asset_id,
-    project_id: asset[0].project_id,
-    image_url: asset[0].url,
-    caption
-  });
 }

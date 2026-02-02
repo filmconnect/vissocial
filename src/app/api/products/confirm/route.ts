@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     // Update product status
     const result = await q(
       `UPDATE detected_products 
-       SET status = 'confirmed', updated_at = NOW()
+       SET status = 'confirmed', confirmed_at = NOW()
        WHERE id = $1
        RETURNING id, product_name, status`,
       [product_id]
