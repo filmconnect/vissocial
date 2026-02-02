@@ -1,24 +1,20 @@
 // ============================================================
-// VISION.TS - GPT-4 Vision API Wrapper
-// ============================================================
-// Low-level wrapper za analizu slika.
-// POTPUNO ODVOJEN od chat logike - ne zna za sessions, UI, state.
-// Lako zamjenjiv s drugim providerom (Claude, Gemini, etc.)
+// VISION.TS - GPT-4 Vision API (URL ONLY - NO BASE64!)
 // ============================================================
 
-import { config } from "./config";
-import { log } from "./logger";
+import { config } from "@/lib/config";
+import { log } from "@/lib/logger";
 
 // ============================================================
-// TYPE DEFINITIONS
+// TYPES
 // ============================================================
 
 export interface VisualStyle {
-  dominant_colors: string[];        // Hex codes: ["#E8B4A0", "#2C3E50"]
-  photography_style: string;        // "lifestyle" | "studio" | "flat_lay" | "product_focus"
-  lighting: string;                 // "natural" | "studio" | "golden_hour" | "soft"
-  mood: string;                     // "cozy" | "professional" | "playful" | "minimal"
-  composition_patterns: string[];   // ["rule_of_thirds", "centered"]
+  dominant_colors: string[];
+  photography_style: string;
+  lighting: string;
+  mood: string;
+  composition_patterns: string[];
 }
 
 export interface DetectedProduct {
@@ -26,7 +22,7 @@ export interface DetectedProduct {
   category: string;
   visual_features: string[];
   prominence: "high" | "medium" | "low";
-  confidence: number; // 0-1
+  confidence: number;
 }
 
 export interface BrandElements {
@@ -54,25 +50,24 @@ export type AnalysisType = "brand_style" | "product_detection" | "full_analysis"
 // ============================================================
 
 const SYSTEM_PROMPTS: Record<AnalysisType, string> = {
-  brand_style: `You are an expert brand analyst specializing in visual identity for Instagram content.
-
-Analyze this image and extract visual brand elements. Return ONLY valid JSON with this structure:
+  brand_style: `You are a visual brand analyst. Analyze the image for brand visual style.
+Return ONLY valid JSON with this structure:
 {
   "visual_style": {
     "dominant_colors": ["#HEX1", "#HEX2", "#HEX3"],
     "photography_style": "lifestyle|studio|flat_lay|product_focus|outdoor|portrait",
-    "lighting": "natural|studio|golden_hour|soft|dramatic|harsh",
-    "mood": "cozy|professional|playful|minimal|luxurious|energetic|calm",
-    "composition_patterns": ["rule_of_thirds", "centered", "symmetrical", "diagonal"]
+    "lighting": "natural|studio|golden_hour|soft|dramatic",
+    "mood": "cozy|professional|playful|minimal|luxurious|energetic",
+    "composition_patterns": ["rule_of_thirds", "centered", "symmetrical"]
   },
+  "products": [],
   "brand_elements": {
     "logo_visible": false,
     "brand_colors_present": true,
     "text_overlay": null
   }
 }
-
-Be specific with hex color codes. Identify the 3-5 most dominant colors.
+Identify the 3-5 most dominant colors.
 Return ONLY valid JSON. No markdown, no explanations.`,
 
   product_detection: `You are a product recognition expert for e-commerce and Instagram content.
@@ -141,17 +136,9 @@ Return ONLY valid JSON. No markdown, no explanations.`
 };
 
 // ============================================================
-// MAIN FUNCTION: analyzeImage
+// MAIN FUNCTION: analyzeImage (URL ONLY!)
 // ============================================================
 
-/**
- * Analyze an image using GPT-4 Vision API
- * 
- * @param imageUrl - Public URL of the image (must be accessible)
- * @param analysisType - Type of analysis to perform
- * @param additionalContext - Optional context (e.g., Instagram caption)
- * @returns VisionAnalysisResult
- */
 export async function analyzeImage(
   imageUrl: string,
   analysisType: AnalysisType = "full_analysis",
@@ -161,19 +148,20 @@ export async function analyzeImage(
   const startTime = Date.now();
   
   log("vision", "analyzeImage:start", {
-    imageUrl: imageUrl.substring(0, 80) + (imageUrl.length > 80 ? "..." : ""),
+    imageUrl: imageUrl.substring(0, 80) + "...",
     type: analysisType,
     hasContext: !!additionalContext
   });
 
   const systemPrompt = SYSTEM_PROMPTS[analysisType];
   
+  // ✅ ŠALJE URL DIREKTNO - NEMA BASE64!
   const userContent: any[] = [
     {
       type: "image_url",
       image_url: {
-        url: imageUrl,
-        detail: "high" // "low" | "high" | "auto"
+        url: imageUrl,  // ← DIREKTAN URL
+        detail: "high"
       }
     }
   ];
@@ -197,14 +185,14 @@ export async function analyzeImage(
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "gpt-4o", // Vision-capable model
+        model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContent }
         ],
         response_format: { type: "json_object" },
         max_tokens: 2000,
-        temperature: 0.3 // Lower temperature for consistent analysis
+        temperature: 0.3
       })
     });
 
@@ -224,7 +212,6 @@ export async function analyzeImage(
       throw new Error("Empty response from Vision API");
     }
 
-    // Parse JSON response
     let analysis: Partial<VisionAnalysisResult>;
     try {
       analysis = JSON.parse(content);
@@ -235,7 +222,6 @@ export async function analyzeImage(
       throw new Error("Failed to parse Vision API response as JSON");
     }
 
-    // Ensure complete structure
     const result = normalizeAnalysisResult(analysis, analysisType);
     
     const duration = Date.now() - startTime;
@@ -244,9 +230,7 @@ export async function analyzeImage(
     log("vision", "analyzeImage:success", {
       duration_ms: duration,
       tokens_used: tokensUsed,
-      products_found: result.products.length,
-      dominant_color: result.visual_style.dominant_colors[0] || "none",
-      mood: result.visual_style.mood
+      products_found: result.products.length
     });
 
     return result;
@@ -259,18 +243,14 @@ export async function analyzeImage(
       error: error.message
     });
 
-    // Return fallback structure instead of throwing
     return createFallbackResult(error.message);
   }
 }
 
 // ============================================================
-// SPECIALIZED WRAPPERS
+// WRAPPERS
 // ============================================================
 
-/**
- * Analyze Instagram post with caption context
- */
 export async function analyzeInstagramPost(
   imageUrl: string,
   caption?: string
@@ -278,9 +258,6 @@ export async function analyzeInstagramPost(
   return analyzeImage(imageUrl, "full_analysis", caption);
 }
 
-/**
- * Quick product detection only
- */
 export async function detectProducts(
   imageUrl: string
 ): Promise<DetectedProduct[]> {
@@ -288,9 +265,6 @@ export async function detectProducts(
   return result.products;
 }
 
-/**
- * Extract brand style only (faster, fewer tokens)
- */
 export async function extractBrandStyle(
   imageUrl: string
 ): Promise<VisualStyle> {
@@ -302,13 +276,6 @@ export async function extractBrandStyle(
 // BATCH ANALYSIS
 // ============================================================
 
-/**
- * Analyze multiple images with rate limiting
- * 
- * @param images - Array of {url, caption?}
- * @param concurrency - Max parallel requests (default: 3)
- * @param delayMs - Delay between batches (default: 1000ms)
- */
 export async function analyzeImageBatch(
   images: Array<{ url: string; caption?: string; id?: string }>,
   concurrency: number = 3,
@@ -337,33 +304,18 @@ export async function analyzeImageBatch(
     const batchResults = await Promise.all(batchPromises);
     results.push(...batchResults);
 
-    // Rate limit delay between batches
     if (i + concurrency < images.length) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
-    
-    log("vision", "analyzeImageBatch:progress", {
-      completed: Math.min(i + concurrency, images.length),
-      total: images.length
-    });
   }
-
-  log("vision", "analyzeImageBatch:complete", {
-    total: images.length,
-    successful: results.filter(r => !r.error).length,
-    failed: results.filter(r => r.error).length
-  });
 
   return results;
 }
 
 // ============================================================
-// HELPER FUNCTIONS
+// HELPERS
 // ============================================================
 
-/**
- * Normalize analysis result to ensure complete structure
- */
 function normalizeAnalysisResult(
   partial: Partial<VisionAnalysisResult>,
   analysisType: AnalysisType
@@ -398,9 +350,6 @@ function normalizeAnalysisResult(
   };
 }
 
-/**
- * Normalize a single product entry
- */
 function normalizeProduct(p: any): DetectedProduct {
   return {
     name: p.name || "Unknown product",
@@ -411,9 +360,6 @@ function normalizeProduct(p: any): DetectedProduct {
   };
 }
 
-/**
- * Create fallback result on error
- */
 function createFallbackResult(errorMessage: string): VisionAnalysisResult {
   return {
     visual_style: {
@@ -432,10 +378,6 @@ function createFallbackResult(errorMessage: string): VisionAnalysisResult {
     raw_description: `Analysis failed: ${errorMessage}`
   };
 }
-
-// ============================================================
-// EXPORTS
-// ============================================================
 
 export default {
   analyzeImage,
