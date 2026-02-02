@@ -1,8 +1,12 @@
 // ============================================================
-// INSTAGRAM INGEST PROCESSOR (PATCHED WITH NOTIFICATIONS)
+// INSTAGRAM INGEST PROCESSOR (FIXED)
 // ============================================================
 // Povlači media s Instagrama, sprema u MinIO i assets tablicu.
-// UPDATED: Trigira Vision analizu + šalje notifikacije u chat.
+//
+// FIX: Proper URL generation for Vision API
+// - Uses makePublicUrl from storageUrl.ts
+// - Stores full HTTPS URL in assets.url
+// - Passes correct URL to analyze job
 // ============================================================
 
 import { q } from "@/lib/db";
@@ -11,9 +15,7 @@ import { downloadToBuffer, putObject } from "@/lib/storage";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
 import { qAnalyze } from "@/lib/jobs";
-import { config } from "@/lib/config";
-import { makePublicUrl } from "@/lib/makePublicUrl";
-import { notify } from "@/lib/notifications";
+import { makePublicUrl } from "@/lib/storageUrl";
 
 // ============================================================
 // TYPES
@@ -48,16 +50,18 @@ export async function instagramIngest(
   log("instagramIngest", "start", {
     project_id,
     limit,
-    skip_analysis
+    skip_analysis,
+    APP_URL: process.env.APP_URL
   });
 
   // =========================================================
-  // 1. Dohvati projekt i provjeri token
+  // 1. Get project and check token
   // =========================================================
-  const project = (await q<any>(
+  
+  const [project] = await q<any>(
     `SELECT * FROM projects WHERE id = $1`,
     [project_id]
-  ))[0];
+  );
 
   if (!project?.meta_access_token || !project?.ig_user_id) {
     log("instagramIngest", "missing_credentials", { project_id });
@@ -71,8 +75,9 @@ export async function instagramIngest(
   }
 
   // =========================================================
-  // 2. Dohvati media s Instagram Graph API
+  // 2. Fetch media from Instagram Graph API
   // =========================================================
+  
   let media;
   try {
     media = await graphGET(
@@ -88,10 +93,6 @@ export async function instagramIngest(
       project_id,
       error: error.message
     });
-    
-    // Notify about failure
-    await notify.jobFailed(project_id, "instagram.ingest", error.message);
-    
     return {
       ok: false,
       stored: 0,
@@ -114,29 +115,41 @@ export async function instagramIngest(
     };
   }
 
+  log("instagramIngest", "media_fetched", {
+    project_id,
+    count: mediaItems.length
+  });
+
   // =========================================================
   // 3. Create rebuild event for tracking
   // =========================================================
+  
   const eventId = "evt_" + uuid();
+  
   await q(
-    `INSERT INTO brand_rebuild_events (id, project_id, trigger_type, total_expected, status)
-     VALUES ($1, $2, 'instagram_ingest', $3, 'analyzing')`,
+    `INSERT INTO brand_rebuild_events (
+      id, project_id, trigger_type, status, 
+      total_expected, analyses_completed
+    )
+    VALUES ($1, $2, 'instagram_ingest', 'analyzing', $3, 0)`,
     [eventId, project_id, mediaItems.length]
   );
 
   // =========================================================
   // 4. Process each media item
   // =========================================================
+  
   let stored = 0;
   let skipped = 0;
   let analysisQueued = 0;
 
-  for (const item of mediaItems) {
+  for (const m of mediaItems) {
     try {
-      // Skip if already exists
+      // Check for duplicates by external_id
       const existing = await q<any>(
-        `SELECT id FROM assets WHERE external_id = $1 AND project_id = $2`,
-        [item.id, project_id]
+        `SELECT id FROM assets 
+         WHERE project_id = $1 AND external_id = $2`,
+        [project_id, m.id]
       );
 
       if (existing.length > 0) {
@@ -144,80 +157,101 @@ export async function instagramIngest(
         continue;
       }
 
-      // Get image URL (use thumbnail for videos)
-      const imageUrl = item.media_type === "VIDEO" 
-        ? item.thumbnail_url 
-        : item.media_url;
+      // Get image URL (thumbnail for videos)
+      const sourceUrl = m.media_type === "VIDEO" 
+        ? m.thumbnail_url 
+        : m.media_url;
 
-      if (!imageUrl) {
-        log("instagramIngest", "no_image_url", { 
-          item_id: item.id, 
-          media_type: item.media_type 
-        });
+      if (!sourceUrl) {
+        log("instagramIngest", "no_source_url", { ig_id: m.id });
         skipped++;
         continue;
       }
 
-// Download and upload to MinIO
-const buffer = await downloadToBuffer(imageUrl);
-const ext = imageUrl.includes(".png") ? "png" : "jpg";
-const key = `instagram/${project_id}/${item.id}.${ext}`;
+      // Download image
+      const buffer = await downloadToBuffer(sourceUrl);
+      
+      const isVideo = m.media_type === "VIDEO";
+      const ext = isVideo ? "mp4" : "jpg";
+      const contentType = isVideo ? "video/mp4" : "image/jpeg";
+      
+      // Upload to MinIO
+      // Key format: ig/{project_id}/{ig_media_id}.{ext}
+      const s3Key = `ig/${project_id}/${m.id}.${ext}`;
+      
+      const uploadedUrl = await putObject(s3Key, buffer, contentType);
+      
+      // CRITICAL: Convert to public HTTPS URL
+      const publicUrl = makePublicUrl(s3Key);
+      
+      log("instagramIngest", "url_generated", {
+        ig_id: m.id,
+        s3_key: s3Key,
+        public_url: publicUrl.substring(0, 100)
+      });
 
-await putObject(key, buffer, `image/${ext === "png" ? "png" : "jpeg"}`);
-const publicUrl = makePublicUrl(key);
+      // Validate URL is HTTPS
+      if (!publicUrl.startsWith("https://")) {
+        log("instagramIngest", "url_not_https", {
+          ig_id: m.id,
+          url: publicUrl.substring(0, 100),
+          APP_URL: process.env.APP_URL
+        });
+        // Don't fail, but log warning
+      }
 
-// Map Instagram media type to asset.type
-const assetType =
-  item.media_type === "VIDEO" ? "video" : "image";
+      // Save to assets table
+      const assetId = "asset_" + uuid();
+      
+      await q(
+        `INSERT INTO assets (id, project_id, external_id, type, source, url, label, metadata)
+         VALUES ($1, $2, $3, $4, 'instagram', $5, 'ig_media', $6)`,
+        [
+          assetId,
+          project_id,
+          m.id,  // external_id for duplicate detection
+          isVideo ? "video" : "image",
+          publicUrl,  // Store the PUBLIC URL, not internal
+          JSON.stringify({
+            ig_media_id: m.id,
+            media_type: m.media_type,
+            caption: m.caption,
+            permalink: m.permalink,
+            timestamp: m.timestamp
+          })
+        ]
+      );
 
-// Save to database
-const assetId = "asset_" + uuid();
-await q(
-  `INSERT INTO assets (
-     id,
-     project_id,
-     type,
-     external_id,
-     source,
-     url,
-     metadata,
-     created_at
-   )
-   VALUES ($1, $2, $3, $4, 'instagram', $5, $6, $7)`,
-  [
-    assetId,
-    project_id,
-    assetType,
-    item.id,
-    publicUrl,
-    JSON.stringify({
-      media_type: item.media_type,
-      permalink: item.permalink,
-      caption: item.caption,
-      timestamp: item.timestamp
-    }),
-    item.timestamp || new Date().toISOString()
-  ]
-);
+      stored++;
 
-stored++;
+      log("instagramIngest", "asset_stored", {
+        asset_id: assetId,
+        ig_media_id: m.id,
+        type: m.media_type,
+        url: publicUrl.substring(0, 80)
+      });
 
-
-      // Queue analysis if not skipped
-      if (!skip_analysis) {
+      // Queue Vision analysis (only for images)
+      if (!skip_analysis && !isVideo) {
         await qAnalyze.add("analyze.instagram", {
           asset_id: assetId,
-          project_id,
-          image_url: publicUrl,
-          caption: item.caption,
+          project_id: project_id,
+          image_url: publicUrl,  // Pass PUBLIC URL to Vision
+          caption: m.caption,
           rebuild_event_id: eventId
         });
+
         analysisQueued++;
+
+        log("instagramIngest", "analysis_queued", {
+          asset_id: assetId,
+          image_url: publicUrl.substring(0, 80)
+        });
       }
 
     } catch (error: any) {
-      log("instagramIngest", "item_error", {
-        item_id: item.id,
+      log("instagramIngest", "process_error", {
+        ig_media_id: m.id,
         error: error.message
       });
       skipped++;
@@ -225,28 +259,48 @@ stored++;
   }
 
   // =========================================================
-  // 5. Update event status
+  // 5. Update brand_profiles
   // =========================================================
+  
   await q(
-    `UPDATE brand_rebuild_events 
-     SET status = 'completed', completed_at = NOW()
-     WHERE id = $1`,
-    [eventId]
+    `UPDATE brand_profiles 
+     SET profile = COALESCE(profile, '{}'::jsonb) || $1::jsonb 
+     WHERE project_id = $2`,
+    [
+      JSON.stringify({
+        ingest: {
+          ig_media_count: mediaItems.length,
+          stored_count: stored,
+          last_ingest: new Date().toISOString()
+        }
+      }),
+      project_id
+    ]
   );
 
   // =========================================================
-  // 6. SEND NOTIFICATION TO CHAT
+  // 6. Mark event as complete if no analysis needed
   // =========================================================
-  if (stored > 0) {
-    await notify.ingestComplete(project_id, stored);
+  
+  if (analysisQueued === 0) {
+    await q(
+      `UPDATE brand_rebuild_events 
+       SET status = 'skipped', completed_at = NOW(),
+           metadata = jsonb_set(COALESCE(metadata, '{}'), '{reason}', '"no_images_to_analyze"')
+       WHERE id = $1`,
+      [eventId]
+    );
   }
 
-  log("instagramIngest", "completed", {
+  const duration = Date.now() - startTime;
+
+  log("instagramIngest", "complete", {
     project_id,
     stored,
     skipped,
     analysis_queued: analysisQueued,
-    duration_ms: Date.now() - startTime
+    event_id: eventId,
+    duration_ms: duration
   });
 
   return {
@@ -256,4 +310,36 @@ stored++;
     analysis_queued: analysisQueued,
     event_id: eventId
   };
+}
+
+// ============================================================
+// RE-INGEST (for refresh)
+// ============================================================
+
+export async function reingestInstagram(
+  project_id: string,
+  force_reanalyze: boolean = false
+): Promise<InstagramIngestResult> {
+  
+  log("instagramIngest", "reingest_start", { project_id, force_reanalyze });
+
+  if (force_reanalyze) {
+    // Delete existing analyses but keep assets
+    await q(
+      `DELETE FROM instagram_analyses 
+       WHERE asset_id IN (
+         SELECT id FROM assets WHERE project_id = $1 AND source = 'instagram'
+       )`,
+      [project_id]
+    );
+    
+    await q(
+      `DELETE FROM detected_products WHERE project_id = $1`,
+      [project_id]
+    );
+
+    log("instagramIngest", "reingest_cleared", { project_id });
+  }
+
+  return instagramIngest({ project_id });
 }

@@ -1,51 +1,48 @@
+// ============================================================
+// /api/chat/notifications
+// ============================================================
+// GET: Fetch unread notifications for session
+// POST: Mark notifications as read
+// ============================================================
+
 import { NextResponse } from "next/server";
-import { q } from "@/lib/db";
+import { getUnreadNotifications, markNotificationsRead } from "@/lib/notifications";
 import { log } from "@/lib/logger";
-import { v4 as uuid } from "uuid";
-import { convertNotificationsToMessages, markNotificationsRead } from "@/lib/notifications";
-import { chip } from "@/lib/chatChips";
 
 // ============================================================
-// GET - Fetch unread notifications and convert to messages
+// GET - Fetch unread notifications
 // ============================================================
 
 export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const session_id = url.searchParams.get("session_id");
+
+  if (!session_id) {
+    return NextResponse.json(
+      { error: "session_id required" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const url = new URL(req.url);
-    const session_id = url.searchParams.get("session_id");
-
-    if (!session_id) {
-      return NextResponse.json({ error: "session_id required" }, { status: 400 });
-    }
-
-    // Try to get notifications - gracefully handle if table doesn't exist
-    let messages: any[] = [];
-    try {
-      messages = await convertNotificationsToMessages(session_id);
-
-      // Also save them as actual chat messages for history
-      for (const msg of messages) {
-        const msgId = "msg_notif_" + uuid();
-        await q(
-          `INSERT INTO chat_messages (id, session_id, role, text, meta)
-           VALUES ($1, $2, 'assistant', $3, $4)
-           ON CONFLICT DO NOTHING`,
-          [msgId, session_id, msg.text, JSON.stringify({ chips: msg.chips, from_notification: true })]
-        );
-      }
-    } catch (error: any) {
-      // Table might not exist yet - that's OK
-      log("api:notifications", "table may not exist yet", { error: error.message });
-      messages = [];
-    }
+    const notifications = await getUnreadNotifications(session_id);
 
     return NextResponse.json({
-      notifications: messages,
-      count: messages.length,
+      session_id,
+      notifications,
+      count: notifications.length
     });
+
   } catch (error: any) {
-    log("api:notifications", "error", { error: error.message });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    log("api:chat:notifications", "get_error", {
+      session_id,
+      error: error.message
+    });
+
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
   }
 }
 
@@ -56,17 +53,34 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { notification_ids } = body;
+    const { session_id, mark_read } = body;
 
-    if (!notification_ids || !Array.isArray(notification_ids)) {
-      return NextResponse.json({ error: "notification_ids array required" }, { status: 400 });
+    if (!session_id) {
+      return NextResponse.json(
+        { error: "session_id required" },
+        { status: 400 }
+      );
     }
 
-    await markNotificationsRead(notification_ids);
+    if (mark_read && Array.isArray(mark_read) && mark_read.length > 0) {
+      await markNotificationsRead(mark_read);
+      
+      log("api:chat:notifications", "marked_read", {
+        session_id,
+        count: mark_read.length
+      });
+    }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ ok: true });
+
   } catch (error: any) {
-    log("api:notifications", "error marking read", { error: error.message });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    log("api:chat:notifications", "post_error", {
+      error: error.message
+    });
+
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
   }
 }

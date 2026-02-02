@@ -1,8 +1,11 @@
 // ============================================================
-// WORKER.TS - BullMQ Workers
+// WORKER.TS - BullMQ Workers (FIXED)
 // ============================================================
-// Background job processors.
-// UPDATED: Dodani wAnalyze i wBrandRebuild
+// FIXES:
+// - Added lockDuration (60s) to prevent lock expiration
+// - Added stalledInterval to detect stalled jobs
+// - Increased concurrency for q_publish
+// - Schedule.tick no longer blocks other jobs
 // ============================================================
 
 import "dotenv/config";
@@ -18,7 +21,7 @@ import { publishInstagram } from "./processors/publishInstagram";
 import { metricsIngest } from "./processors/metricsIngest";
 import { scheduleTick } from "./processors/scheduleTick";
 
-// NEW processors (FAZA 1)
+// Vision processors
 import { analyzeInstagram } from "./processors/analyzeInstagram";
 import { brandRebuild } from "./processors/brandRebuild";
 
@@ -27,19 +30,28 @@ import { ensureBucket } from "@/lib/storage";
 
 const connection = { url: config.redisUrl };
 
+// ============================================================
+// WORKER CONFIG - PREVENTS LOCK ISSUES
+// ============================================================
+const baseWorkerConfig = {
+  connection,
+  lockDuration: 60000,      // 60 seconds (default is 30s - too short!)
+  stalledInterval: 30000,   // Check for stalled jobs every 30s
+  maxStalledCount: 2,       // Retry stalled jobs up to 2 times
+};
+
 log("worker", "boot", {
   redis: config.redisUrl,
-  pid: process.pid
+  pid: process.pid,
+  lockDuration: baseWorkerConfig.lockDuration
 });
 
 // Ensure MinIO bucket exists
 await ensureBucket();
 
 // ============================================================
-// EXISTING WORKERS
+// INGEST WORKER
 // ============================================================
-
-// Ingest Worker
 new Worker(
   "q_ingest",
   async (job) => {
@@ -65,10 +77,12 @@ new Worker(
       throw e;
     }
   },
-  { connection }
+  { ...baseWorkerConfig }
 );
 
-// LLM Worker
+// ============================================================
+// LLM WORKER (plan.generate)
+// ============================================================
 new Worker(
   "q_llm",
   async (job) => {
@@ -94,10 +108,16 @@ new Worker(
       throw e;
     }
   },
-  { connection }
+  { 
+    ...baseWorkerConfig,
+    lockDuration: 120000,  // 2 minutes for LLM calls (they take time)
+    concurrency: 1         // One at a time to avoid rate limits
+  }
 );
 
-// Render Worker
+// ============================================================
+// RENDER WORKER (fal.ai)
+// ============================================================
 new Worker(
   "q_render",
   async (job) => {
@@ -123,10 +143,16 @@ new Worker(
       throw e;
     }
   },
-  { connection }
+  { 
+    ...baseWorkerConfig,
+    lockDuration: 90000,  // 90 seconds for render
+    concurrency: 3        // 3 parallel renders
+  }
 );
 
-// Publish Worker
+// ============================================================
+// PUBLISH WORKER (schedule.tick + publish.instagram)
+// ============================================================
 new Worker(
   "q_publish",
   async (job) => {
@@ -160,16 +186,18 @@ new Worker(
     }
   },
   { 
-    connection,
-    concurrency: 2, // ← PROMIJENJENO sa 1 na 2
-    limiter: {     // ← DODANO
+    ...baseWorkerConfig,
+    concurrency: 3,  // ✅ Increased from 1 to 3
+    limiter: {
       max: 10,
       duration: 60000
     }
   }
 );
 
-// Metrics Worker
+// ============================================================
+// METRICS WORKER
+// ============================================================
 new Worker(
   "q_metrics",
   async (job) => {
@@ -195,14 +223,12 @@ new Worker(
       throw e;
     }
   },
-  { connection }
+  { ...baseWorkerConfig }
 );
 
 // ============================================================
-// NEW WORKERS (FAZA 1)
+// ANALYZE WORKER (Vision API)
 // ============================================================
-
-// Analyze Worker - Vision API analysis
 new Worker(
   "q_analyze",
   async (job) => {
@@ -233,12 +259,15 @@ new Worker(
     }
   },
   { 
-    connection,
-    concurrency: 3 // Process 3 images in parallel (respect rate limits)
+    ...baseWorkerConfig,
+    lockDuration: 90000,  // 90 seconds for Vision API
+    concurrency: 3        // 3 parallel analyses
   }
 );
 
-// Brand Rebuild Worker
+// ============================================================
+// BRAND REBUILD WORKER
+// ============================================================
 new Worker(
   "q_brand_rebuild",
   async (job) => {
@@ -268,28 +297,38 @@ new Worker(
     }
   },
   { 
-    connection,
-    concurrency: 1 // Only 1 rebuild at a time per project
+    ...baseWorkerConfig,
+    concurrency: 1  // Only 1 rebuild at a time
   }
 );
 
 // ============================================================
-// SCHEDULE POLLING (OPTIMIZED)
+// SCHEDULE POLLING (with better job options)
 // ============================================================
-
 (async () => {
   try {
     log("worker:scheduler", "schedule.tick setup start");
     
-    // ✅ PROMIJENI SA 60s NA 5min
+    // Remove old repeatable jobs first
+    const repeatableJobs = await qPublish.getRepeatableJobs();
+    for (const job of repeatableJobs) {
+      if (job.name === "schedule.tick") {
+        await qPublish.removeRepeatableByKey(job.key);
+        log("worker:scheduler", "removed old schedule.tick", { key: job.key });
+      }
+    }
+    
+    // Add new schedule.tick with proper options
     await qPublish.add(
       "schedule.tick", 
-      { project_id: "proj_local" }, // ← DODAJ project_id
+      { project_id: "proj_local" },
       { 
         repeat: { 
-          every: 5 * 60 * 1000 // ← 5 minuta (300,000 ms)
+          every: 5 * 60 * 1000  // 5 minutes
         },
-        jobId: "schedule-tick-repeating" // ← Fiksni ID
+        jobId: "schedule-tick-main",
+        removeOnComplete: true,  // ✅ Clean up completed jobs
+        removeOnFail: 10         // Keep last 10 failed for debugging
       }
     );
     
@@ -309,7 +348,7 @@ log("worker", "Workers running.", {
     "q_render",
     "q_publish",
     "q_metrics",
-    "q_analyze",      // NEW
-    "q_brand_rebuild" // NEW
+    "q_analyze",
+    "q_brand_rebuild"
   ]
 });

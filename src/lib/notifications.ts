@@ -1,304 +1,316 @@
 // ============================================================
-// CHAT NOTIFICATIONS - Helper for worker → chat communication
+// NOTIFICATIONS.TS - Worker → Chat Async Notifications
+// ============================================================
+// Sustav za slanje notifikacija iz workera u chat.
+// Worker zapisuje u chat_notifications tablicu,
+// frontend poll-a /api/chat/notifications endpoint.
 // ============================================================
 
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
-import { chip, ChatChip } from "@/lib/chatChips";
 
 // ============================================================
 // TYPES
 // ============================================================
 
-export type NotificationType =
-  | "job_started"
-  | "job_complete"
-  | "job_failed"
-  | "products_detected"
-  | "analysis_complete"
-  | "ingest_complete"
-  | "brand_rebuild_complete"
-  | "plan_generated"
-  | "info"
-  | "warning"
-  | "error";
-
-export interface NotificationData {
-  job_name?: string;
-  job_id?: string;
-  count?: number;
-  products_count?: number;
-  images_count?: number;
-  duration_ms?: number;
-  error?: string;
-  [key: string]: any;
+export interface ChatChip {
+  type: "suggestion" | "onboarding_option" | "product_confirm" | "navigation";
+  label: string;
+  value?: string;
+  href?: string;
+  productId?: string;
+  action?: "confirm" | "reject";
 }
 
-export interface ChatNotification {
+export interface NotificationInput {
+  session_id?: string;  // Optional - if not provided, uses latest session for project
+  project_id: string;
+  type: "ingest_complete" | "analysis_complete" | "brand_rebuild_complete" | 
+        "plan_generated" | "job_failed" | "product_detected" | "info";
+  title: string;
+  message: string;
+  data?: Record<string, any>;
+  chips?: ChatChip[];
+}
+
+export interface Notification {
   id: string;
   session_id: string;
   project_id: string;
-  type: NotificationType;
+  type: string;
   title: string;
-  message: string | null;
-  data: NotificationData;
-  chips: ChatChip[];
+  message: string;
+  data: Record<string, any> | null;
+  chips: ChatChip[] | null;
   read: boolean;
   created_at: Date;
 }
 
 // ============================================================
-// GET ACTIVE SESSION FOR PROJECT
+// PUSH NOTIFICATION (from worker)
 // ============================================================
 
-async function getActiveSession(project_id: string): Promise<string | null> {
+/**
+ * Push a notification to the chat system.
+ * If session_id is not provided, it will use the most recent session for the project.
+ */
+export async function pushNotification(input: NotificationInput): Promise<string | null> {
+  const { project_id, type, title, message, data, chips } = input;
+  let { session_id } = input;
+
   try {
-    // Get most recent session for this project
-    const [session] = await q<any>(
-      `SELECT id FROM chat_sessions 
-       WHERE project_id = $1 
-       ORDER BY created_at DESC 
-       LIMIT 1`,
-      [project_id]
-    );
-    return session?.id || null;
-  } catch (error: any) {
-    // Table might not exist yet or project_id column missing
-    log("notifications", "getActiveSession error (table may not exist)", { 
-      project_id, 
-      error: error.message 
-    });
-    return null;
-  }
-}
-
-// ============================================================
-// PUSH NOTIFICATION
-// ============================================================
-
-export async function pushNotification(
-  project_id: string,
-  type: NotificationType,
-  title: string,
-  message?: string,
-  data?: NotificationData,
-  chips?: ChatChip[]
-): Promise<string | null> {
-  try {
-    const session_id = await getActiveSession(project_id);
-    
+    // If no session_id, find the most recent session for this project
     if (!session_id) {
-      log("notifications", "no active session found", { project_id, type });
-      return null;
+      const sessions = await q<any>(
+        `SELECT id FROM chat_sessions 
+         WHERE project_id = $1 
+         ORDER BY created_at DESC 
+         LIMIT 1`,
+        [project_id]
+      );
+      
+      if (sessions.length === 0) {
+        log("notifications", "no_session_found", { project_id });
+        return null;
+      }
+      
+      session_id = sessions[0].id;
     }
 
-    const id = "notif_" + uuid();
+    const notificationId = "notif_" + uuid();
 
     await q(
-      `INSERT INTO chat_notifications (id, session_id, project_id, type, title, message, data, chips)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO chat_notifications 
+       (id, session_id, project_id, type, title, message, data, chips, read, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, NOW())`,
       [
-        id,
+        notificationId,
         session_id,
         project_id,
         type,
         title,
-        message || null,
-        JSON.stringify(data || {}),
-        JSON.stringify(chips || []),
+        message,
+        data ? JSON.stringify(data) : null,
+        chips ? JSON.stringify(chips) : null
       ]
     );
 
-    log("notifications", "pushed notification", { id, session_id, type, title });
-    return id;
+    log("notifications", "pushed", {
+      id: notificationId,
+      session_id,
+      project_id,
+      type,
+      title
+    });
+
+    return notificationId;
+
   } catch (error: any) {
-    // Graceful degradation - if table doesn't exist, just log and continue
-    log("notifications", "error pushing notification (table may not exist)", { 
-      error: error.message, 
-      project_id, 
-      type 
+    // Graceful degradation - log but don't throw
+    log("notifications", "push_error", {
+      project_id,
+      type,
+      error: error.message
     });
     return null;
   }
 }
 
 // ============================================================
-// HELPER FUNCTIONS FOR COMMON NOTIFICATIONS
+// GET UNREAD NOTIFICATIONS (for API)
+// ============================================================
+
+export async function getUnreadNotifications(
+  session_id: string
+): Promise<Notification[]> {
+  try {
+    const notifications = await q<any>(
+      `SELECT id, session_id, project_id, type, title, message, data, chips, read, created_at
+       FROM chat_notifications
+       WHERE session_id = $1 AND read = false
+       ORDER BY created_at ASC`,
+      [session_id]
+    );
+
+    return notifications.map((n: any) => ({
+      ...n,
+      data: typeof n.data === "string" ? JSON.parse(n.data) : n.data,
+      chips: typeof n.chips === "string" ? JSON.parse(n.chips) : n.chips
+    }));
+
+  } catch (error: any) {
+    log("notifications", "get_error", {
+      session_id,
+      error: error.message
+    });
+    return [];
+  }
+}
+
+// ============================================================
+// MARK AS READ
+// ============================================================
+
+export async function markNotificationsRead(
+  notification_ids: string[]
+): Promise<void> {
+  if (notification_ids.length === 0) return;
+
+  try {
+    await q(
+      `UPDATE chat_notifications 
+       SET read = true 
+       WHERE id = ANY($1)`,
+      [notification_ids]
+    );
+
+    log("notifications", "marked_read", {
+      count: notification_ids.length
+    });
+
+  } catch (error: any) {
+    log("notifications", "mark_read_error", {
+      error: error.message
+    });
+  }
+}
+
+// ============================================================
+// CONVERT TO CHAT MESSAGES
+// ============================================================
+
+export interface ChatMessage {
+  id: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  chips?: ChatChip[];
+  meta?: Record<string, any>;
+}
+
+export function convertNotificationsToMessages(
+  notifications: Notification[]
+): ChatMessage[] {
+  return notifications.map(n => ({
+    id: n.id,
+    role: "assistant" as const,
+    text: n.message,
+    chips: n.chips || undefined,
+    meta: {
+      notification_type: n.type,
+      notification_title: n.title,
+      ...n.data
+    }
+  }));
+}
+
+// ============================================================
+// HELPER FUNCTIONS (convenience wrappers)
 // ============================================================
 
 export const notify = {
-  // Instagram ingest started
-  ingestStarted: (project_id: string) =>
-    pushNotification(
+  /**
+   * Notify when Instagram ingest completes
+   */
+  ingestComplete: async (
+    project_id: string,
+    stored: number,
+    skipped: number
+  ) => {
+    return pushNotification({
       project_id,
-      "job_started",
-      "📥 Povlačim slike s Instagrama...",
-      "Ovo može potrajati minutu-dvije.",
-      { job_name: "instagram.ingest" }
-    ),
+      type: "ingest_complete",
+      title: "Instagram sync završen",
+      message: `Dohvaćeno ${stored} novih objava${skipped > 0 ? ` (${skipped} preskočeno)` : ""}.`,
+      data: { stored, skipped },
+      chips: [{ type: "suggestion", label: "Pokreni analizu", value: "Pokreni analizu" }]
+    });
+  },
 
-  // Instagram ingest complete
-  ingestComplete: (project_id: string, count: number) =>
-    pushNotification(
+  /**
+   * Notify when analysis completes
+   */
+  analysisComplete: async (
+    project_id: string,
+    analyzed: number,
+    productsFound: number
+  ) => {
+    const hasProducts = productsFound > 0;
+    
+    return pushNotification({
       project_id,
-      "ingest_complete",
-      `✅ Povukao sam ${count} slika s Instagrama!`,
-      "Pokrećem analizu...",
-      { images_count: count },
-      [chip.suggestion("Status")]
-    ),
+      type: "analysis_complete",
+      title: "Analiza gotova",
+      message: `Analizirano ${analyzed} objava. ${hasProducts ? `Pronađeno ${productsFound} proizvoda.` : ""}`,
+      data: { analyzed, productsFound },
+      chips: hasProducts 
+        ? [{ type: "suggestion", label: "Prikaži proizvode", value: "Prikaži proizvode" }]
+        : [{ type: "suggestion", label: "Generiraj plan", value: "Generiraj plan" }]
+    });
+  },
 
-  // Analysis started
-  analysisStarted: (project_id: string, total: number) =>
-    pushNotification(
+  /**
+   * Notify when brand rebuild completes
+   */
+  brandRebuildComplete: async (
+    project_id: string,
+    postsAnalyzed: number,
+    pendingProducts: number,
+    dominantColor?: string,
+    mood?: string
+  ) => {
+    let message = `✅ Analiza završena!\n\n`;
+    message += `📊 Analizirano: ${postsAnalyzed} objava\n`;
+    if (dominantColor) message += `🎨 Dominantna boja: ${dominantColor}\n`;
+    if (mood) message += `📸 Stil: ${mood}\n`;
+    if (pendingProducts > 0) {
+      message += `\n🏷️ Pronađeno ${pendingProducts} proizvoda za potvrdu.`;
+    }
+
+    return pushNotification({
       project_id,
-      "job_started",
-      `🔍 Analiziram ${total} slika...`,
-      "Tražim proizvode, stil i boje.",
-      { job_name: "analyze", images_count: total }
-    ),
+      type: "brand_rebuild_complete",
+      title: "Brand profil ažuriran",
+      message,
+      data: { postsAnalyzed, pendingProducts, dominantColor, mood },
+      chips: pendingProducts > 0
+        ? [{ type: "suggestion", label: "Prikaži proizvode", value: "Prikaži proizvode" }]
+        : [{ type: "suggestion", label: "Generiraj plan", value: "Generiraj plan" }]
+    });
+  },
 
-  // Analysis complete with products
-  analysisComplete: (project_id: string, products_count: number, images_count: number) =>
-    pushNotification(
+  /**
+   * Notify when plan generation completes
+   */
+  planGenerated: async (
+    project_id: string,
+    itemsCount: number,
+    month: string
+  ) => {
+    return pushNotification({
       project_id,
-      "analysis_complete",
-      `🔔 Analiza gotova!`,
-      products_count > 0
-        ? `Pronašao sam ${products_count} proizvoda za potvrdu.`
-        : `Analizirao sam ${images_count} slika.`,
-      { products_count, images_count },
-      products_count > 0
-        ? [chip.suggestion("Prikaži proizvode"), chip.suggestion("Potvrdi sve")]
-        : [chip.suggestion("Status")]
-    ),
+      type: "plan_generated",
+      title: "Plan generiran",
+      message: `Plan za ${month} je spreman! Kreirano ${itemsCount} objava.`,
+      data: { itemsCount, month },
+      chips: [{ type: "navigation", label: "Otvori Calendar", href: "/calendar" }]
+    });
+  },
 
-  // Products detected (can be called separately)
-  productsDetected: (project_id: string, count: number) =>
-    pushNotification(
+  /**
+   * Notify when a job fails
+   */
+  jobFailed: async (
+    project_id: string,
+    jobType: string,
+    errorMessage: string
+  ) => {
+    return pushNotification({
       project_id,
-      "products_detected",
-      `📦 Pronađeno ${count} novih proizvoda!`,
-      "Potvrdi ih da mogu bolje personalizirati sadržaj.",
-      { products_count: count },
-      [chip.suggestion("Prikaži proizvode"), chip.suggestion("Potvrdi sve")]
-    ),
-
-  // Brand rebuild complete
-  brandRebuildComplete: (project_id: string) =>
-    pushNotification(
-      project_id,
-      "brand_rebuild_complete",
-      `✨ Brand profil ažuriran!`,
-      "Spreman si za generiranje plana.",
-      {},
-      [chip.suggestion("Generiraj plan"), chip.suggestion("Status")]
-    ),
-
-  // Plan generated
-  planGenerated: (project_id: string, items_count: number, month: string) =>
-    pushNotification(
-      project_id,
-      "plan_generated",
-      `🎉 Plan generiran!`,
-      `Kreirao sam ${items_count} objava za ${month}.`,
-      { items_count, month },
-      [chip.navigation("Otvori Calendar", "/calendar"), chip.suggestion("Status")]
-    ),
-
-  // Web scrape complete
-  webScrapeComplete: (project_id: string, brand_name: string | null, products_count: number) =>
-    pushNotification(
-      project_id,
-      "job_complete",
-      `🌐 Web pretraga završena!`,
-      brand_name
-        ? `Pronašao sam "${brand_name}" i ${products_count} proizvoda.`
-        : `Pronašao sam ${products_count} proizvoda.`,
-      { brand_name, products_count },
-      products_count > 0
-        ? [chip.suggestion("Prikaži proizvode")]
-        : [chip.suggestion("Status")]
-    ),
-
-  // Job failed
-  jobFailed: (project_id: string, job_name: string, error: string) =>
-    pushNotification(
-      project_id,
-      "job_failed",
-      `❌ Greška: ${job_name}`,
-      error.slice(0, 200),
-      { job_name, error },
-      [chip.suggestion("Status"), chip.suggestion("Pomoć")]
-    ),
-
-  // Generic info
-  info: (project_id: string, title: string, message?: string, chips?: ChatChip[]) =>
-    pushNotification(project_id, "info", title, message, {}, chips),
-
-  // Generic warning
-  warning: (project_id: string, title: string, message?: string) =>
-    pushNotification(project_id, "warning", `⚠️ ${title}`, message),
-
-  // Generic error
-  error: (project_id: string, title: string, message?: string) =>
-    pushNotification(project_id, "error", `❌ ${title}`, message),
+      type: "job_failed",
+      title: `Greška: ${jobType}`,
+      message: `Nešto je pošlo po zlu: ${errorMessage}`,
+      data: { jobType, error: errorMessage }
+    });
+  }
 };
-
-// ============================================================
-// GET UNREAD NOTIFICATIONS
-// ============================================================
-
-export async function getUnreadNotifications(session_id: string): Promise<ChatNotification[]> {
-  const notifications = await q<any>(
-    `SELECT id, session_id, project_id, type, title, message, data, chips, read, created_at
-     FROM chat_notifications
-     WHERE session_id = $1 AND read = FALSE
-     ORDER BY created_at ASC`,
-    [session_id]
-  );
-
-  return notifications.map((n: any) => ({
-    ...n,
-    data: n.data || {},
-    chips: n.chips || [],
-  }));
-}
-
-// ============================================================
-// MARK NOTIFICATIONS AS READ
-// ============================================================
-
-export async function markNotificationsRead(notification_ids: string[]): Promise<void> {
-  if (notification_ids.length === 0) return;
-
-  await q(
-    `UPDATE chat_notifications SET read = TRUE WHERE id = ANY($1)`,
-    [notification_ids]
-  );
-}
-
-// ============================================================
-// CONVERT NOTIFICATIONS TO CHAT MESSAGES
-// ============================================================
-
-export async function convertNotificationsToMessages(
-  session_id: string
-): Promise<Array<{ id: string; role: "assistant"; text: string; chips: ChatChip[] }>> {
-  const notifications = await getUnreadNotifications(session_id);
-
-  if (notifications.length === 0) return [];
-
-  const messages = notifications.map((n) => ({
-    id: n.id,
-    role: "assistant" as const,
-    text: n.message ? `${n.title}\n\n${n.message}` : n.title,
-    chips: n.chips,
-  }));
-
-  // Mark as read
-  await markNotificationsRead(notifications.map((n) => n.id));
-
-  return messages;
-}
