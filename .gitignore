@@ -11,8 +11,10 @@
 .env.production
 .env.production.local
 
-# Keep base .env for defaults
-!.env
+# Ignore all env files
+.env
+.env.*
+!.env.example
 
 # ============================================================
 # Next.js
