@@ -1,18 +1,21 @@
 // ============================================================
-// /api/chat/notifications
+// API: /api/chat/notifications
 // ============================================================
-// GET: Fetch unread notifications for session
-// POST: Mark notifications as read
+// Polling endpoint za async notifikacije iz workera.
+// GET: Dohvaća nepročitane notifikacije za session
+// POST: Markira notifikaciju kao pročitanu
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { getUnreadNotifications, markNotificationsRead } from "@/lib/notifications";
+import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
 
-// ============================================================
-// GET - Fetch unread notifications
-// ============================================================
+const PROJECT_ID = "proj_local";
 
+// ============================================================
+// GET /api/chat/notifications
+// Dohvaća nepročitane notifikacije za danu session
+// ============================================================
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const session_id = url.searchParams.get("session_id");
@@ -25,61 +28,101 @@ export async function GET(req: Request) {
   }
 
   try {
-    const notifications = await getUnreadNotifications(session_id);
+    // Dohvati nepročitane notifikacije za ovu session
+    // Limit na 10 da ne preopteretimo frontend
+    const notifications = await q<any>(
+      `SELECT id, type, title, message, data, chips, created_at
+       FROM chat_notifications
+       WHERE session_id = $1 AND read = false
+       ORDER BY created_at ASC
+       LIMIT 10`,
+      [session_id]
+    );
+
+    // Parse JSONB fields
+    const parsed = notifications.map((n: any) => ({
+      id: n.id,
+      type: n.type,
+      title: n.title,
+      message: n.message,
+      data: typeof n.data === "string" ? JSON.parse(n.data) : n.data,
+      chips: typeof n.chips === "string" ? JSON.parse(n.chips) : n.chips,
+      created_at: n.created_at
+    }));
 
     return NextResponse.json({
-      session_id,
-      notifications,
-      count: notifications.length
+      ok: true,
+      notifications: parsed,
+      count: parsed.length
     });
 
   } catch (error: any) {
-    log("api:chat:notifications", "get_error", {
-      session_id,
-      error: error.message
-    });
-
+    log("api:notifications", "GET error", { error: error.message });
     return NextResponse.json(
-      { error: error.message },
+      { error: "Failed to fetch notifications" },
       { status: 500 }
     );
   }
 }
 
 // ============================================================
-// POST - Mark notifications as read
+// POST /api/chat/notifications
+// Markira notifikaciju kao pročitanu ili izvršava akciju
 // ============================================================
-
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { session_id, mark_read } = body;
+    const { notification_id, action } = body;
 
-    if (!session_id) {
+    if (!notification_id) {
       return NextResponse.json(
-        { error: "session_id required" },
+        { error: "notification_id required" },
         { status: 400 }
       );
     }
 
-    if (mark_read && Array.isArray(mark_read) && mark_read.length > 0) {
-      await markNotificationsRead(mark_read);
-      
-      log("api:chat:notifications", "marked_read", {
-        session_id,
-        count: mark_read.length
-      });
+    if (action === "mark_read") {
+      // Mark single notification as read
+      await q(
+        `UPDATE chat_notifications SET read = true WHERE id = $1`,
+        [notification_id]
+      );
+
+      log("api:notifications", "marked_read", { notification_id });
+
+      return NextResponse.json({ ok: true, marked: notification_id });
     }
 
-    return NextResponse.json({ ok: true });
+    if (action === "mark_all_read") {
+      // Mark all notifications for session as read
+      const session_id = body.session_id;
+      if (!session_id) {
+        return NextResponse.json(
+          { error: "session_id required for mark_all_read" },
+          { status: 400 }
+        );
+      }
 
-  } catch (error: any) {
-    log("api:chat:notifications", "post_error", {
-      error: error.message
-    });
+      const result = await q(
+        `UPDATE chat_notifications SET read = true 
+         WHERE session_id = $1 AND read = false`,
+        [session_id]
+      );
+
+      log("api:notifications", "marked_all_read", { session_id });
+
+      return NextResponse.json({ ok: true, session_id });
+    }
 
     return NextResponse.json(
-      { error: error.message },
+      { error: "Invalid action" },
+      { status: 400 }
+    );
+
+  } catch (error: any) {
+    log("api:notifications", "POST error", { error: error.message });
+    return NextResponse.json(
+      { error: "Failed to process notification action" },
       { status: 500 }
     );
   }

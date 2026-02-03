@@ -1,1155 +1,1439 @@
+// ============================================================
+// API: /api/chat/message - V4
+// ============================================================
+// IMPROVEMENTS:
+// - After "missing requirements" → offer onboarding questions
+// - Don't offer "connect IG" if already connected
+// - "Bez Instagrama" → web scraping + manual upload + website URL
+// - Enhanced scraping with web search fallback + website scraping
+// - Progress tracking for onboarding
+// ============================================================
+
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
-import { qLLM, qExport, qMetrics, qBrandRebuild, qIngest, qAnalyze } from "@/lib/jobs";
+import { qLLM, qExport, qMetrics } from "@/lib/jobs";
 import { log } from "@/lib/logger";
-import {
-  chip,
-  ChatChip,
-  ONBOARDING_QUESTIONS,
-  REQUIRED_QUESTIONS,
-  OPTIONAL_QUESTIONS,
-} from "@/lib/chatChips";
 
 const PROJECT_ID = "proj_local";
 
 // ============================================================
-// TYPES
+// Types
 // ============================================================
 
-interface SystemState {
+interface OnboardingProgress {
   ig_connected: boolean;
-  ig_username: string | null;
-  media_count: number;
-  media_analyzed: number;
-  pending_products: number;
-  confirmed_products: number;
-  brand_profile_ready: boolean;
-  brand_name: string | null;
-  active_jobs: number;
-  has_references: boolean;
+  has_reference_image: boolean;
+  has_products: boolean;
+  has_confirmed_products: boolean;
+  has_goal: boolean;
+  has_profile_type: boolean;
+  has_focus: boolean;
+  analysis_complete: boolean;
 }
 
-interface SessionState {
-  step: string;
-  brand_name?: string;
-  profile_type?: string;
-  industry?: string;
-  goal?: string;
-  frequency?: string;
-  tone?: string;
-  answered_questions: string[];
-  optional_question_index: number;
-  system_state_at_start?: SystemState;
-  [key: string]: any;
+interface GenerationRequirements {
+  canGenerate: boolean;
+  missing: string[];
+  progress: OnboardingProgress;
 }
 
 // ============================================================
-// HELPERS
+// Helpers
 // ============================================================
 
-function normalize(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+function normalize(text: string) {
+  return text.trim().toLowerCase();
 }
 
 async function pushMessage(
   session_id: string,
   role: "user" | "assistant",
   text: string,
-  chips: ChatChip[] | null = null
+  meta: any = null
 ) {
   const id = "msg_" + uuid();
-  const meta = chips ? { chips } : null;
-
   await q(
     `INSERT INTO chat_messages(id, session_id, role, text, meta)
      VALUES ($1,$2,$3,$4,$5)`,
     [id, session_id, role, text, meta ? JSON.stringify(meta) : null]
   );
-
-  return { id, role, text, chips };
+  return { id, role, text, chips: meta?.chips };
 }
 
-async function updateSessionState(session_id: string, updates: Partial<SessionState>) {
-  const [sess] = await q<any>(`SELECT state FROM chat_sessions WHERE id = $1`, [session_id]);
-  const currentState = sess?.state ?? {};
-  const newState = { ...currentState, ...updates };
-
-  await q(`UPDATE chat_sessions SET state = $1 WHERE id = $2`, [
-    JSON.stringify(newState),
-    session_id,
-  ]);
-
-  return newState;
+function extractInstagramUsername(text: string): string | null {
+  const patterns = [
+    /@([a-zA-Z0-9_.]+)/,
+    /instagram\.com\/([a-zA-Z0-9_.]+)/i,
+    /^([a-zA-Z0-9_.]+)$/
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1].replace(/[\/\?].*$/, '');
+    }
+  }
+  return null;
 }
 
-async function getSessionState(session_id: string): Promise<SessionState> {
-  const [sess] = await q<any>(`SELECT state FROM chat_sessions WHERE id = $1`, [session_id]);
-  return sess?.state ?? { step: "init", answered_questions: [], optional_question_index: 0 };
-}
-
-// ============================================================
-// SYSTEM STATE
-// ============================================================
-
-async function getSystemState(): Promise<SystemState> {
-  const [project] = await q<any>(
-    `SELECT ig_connected, ig_user_id, name FROM projects WHERE id = $1`,
-    [PROJECT_ID]
-  ).catch(() => [{ ig_connected: false, ig_user_id: null, name: null }]);
-
-  const [assets] = await q<any>(
-    `SELECT 
-       COUNT(*) as total,
-       COUNT(CASE WHEN id IN (SELECT asset_id FROM instagram_analyses) THEN 1 END) as analyzed
-     FROM assets WHERE project_id = $1`,
-    [PROJECT_ID]
-  ).catch(() => [{ total: 0, analyzed: 0 }]);
-
-  const [products] = await q<any>(
-    `SELECT 
-       COUNT(*) FILTER (WHERE status = 'pending') as pending,
-       COUNT(*) FILTER (WHERE status = 'confirmed') as confirmed
-     FROM detected_products WHERE project_id = $1`,
-    [PROJECT_ID]
-  ).catch(() => [{ pending: 0, confirmed: 0 }]);
-
-  const [brandProfile] = await q<any>(
-    `SELECT profile FROM brand_profiles WHERE project_id = $1`,
-    [PROJECT_ID]
-  ).catch(() => [{ profile: null }]);
-
-  const [jobs] = await q<any>(
-    `SELECT COUNT(*) as count FROM jobs 
-     WHERE project_id = $1 AND status IN ('queued', 'running')`,
-    [PROJECT_ID]
-  ).catch(() => [{ count: 0 }]);
-
-  const [refs] = await q<any>(
-    `SELECT COUNT(*) as count FROM assets 
-     WHERE project_id = $1 AND (label LIKE '%reference%' OR source = 'upload')`,
-    [PROJECT_ID]
-  ).catch(() => [{ count: 0 }]);
-
-  const profile = brandProfile?.profile;
-
-  return {
-    ig_connected: project?.ig_connected || false,
-    ig_username: project?.ig_user_id || null,
-    media_count: parseInt(assets?.total || "0"),
-    media_analyzed: parseInt(assets?.analyzed || "0"),
-    pending_products: parseInt(products?.pending || "0"),
-    confirmed_products: parseInt(products?.confirmed || "0"),
-    brand_profile_ready: !!(profile && Object.keys(profile).length > 2),
-    brand_name: profile?.brand_name || project?.name || null,
-    active_jobs: parseInt(jobs?.count || "0"),
-    has_references: parseInt(refs?.count || "0") > 0 || parseInt(assets?.total || "0") > 0,
-  };
-}
-
-// ============================================================
-// READINESS CHECK
-// ============================================================
-
-interface ReadinessResult {
-  ready: boolean;
-  missing: string[];
-  warnings: string[];
-}
-
-function checkReadiness(state: SystemState, sessionState: SessionState): ReadinessResult {
-  const missing: string[] = [];
-  const warnings: string[] = [];
-
-  // NUŽNO: Ime brenda
-  if (!state.brand_name && !sessionState.brand_name) {
-    missing.push("Ime brenda");
+function extractWebsiteUrl(text: string): string | null {
+  // First try to find a complete URL
+  const fullUrlPattern = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/i;
+  const fullMatch = text.match(fullUrlPattern);
+  if (fullMatch) {
+    // Clean up trailing punctuation
+    return fullMatch[0].replace(/[.,;:!?)]+$/, '');
   }
-
-  // NUŽNO: Tip profila
-  if (!sessionState.profile_type) {
-    missing.push("Tip profila");
-  }
-
-  // NUŽNO: Barem 1 proizvod ILI kategorija
-  if (state.confirmed_products === 0 && !sessionState.industry) {
-    missing.push("Proizvod ili kategorija");
-  }
-
-  // NUŽNO: Barem 1 vizualna referenca
-  if (!state.has_references) {
-    missing.push("Vizualna referenca (IG slike, upload, ili web logo)");
-  }
-
-  // UPOZORENJA (ne blokiraju, ali upozoravaju)
-  if (state.pending_products > 0) {
-    warnings.push(`${state.pending_products} proizvoda čeka potvrdu`);
-  }
-
-  if (!sessionState.goal) {
-    warnings.push("Cilj nije definiran");
-  }
-
-  return {
-    ready: missing.length === 0,
-    missing,
-    warnings,
-  };
-}
-
-// ============================================================
-// COMMAND HANDLERS
-// ============================================================
-
-async function handleCommand(
-  norm: string,
-  session_id: string,
-  state: SystemState,
-  sessionState: SessionState
-): Promise<{ handled: boolean; response?: { text: string; chips?: ChatChip[] } }> {
   
-  // STATUS
-  if (/\b(status|stanje|pregled)\b/.test(norm) && !norm.includes("proizvod")) {
-    const readiness = checkReadiness(state, sessionState);
-    
-    let text = `📊 **Status projekta:**\n\n`;
-    text += `• Instagram: ${state.ig_connected ? "✅ Povezan" : "❌ Nije povezan"}\n`;
-    text += `• Slike: ${state.media_count} (analizirano: ${state.media_analyzed})\n`;
-    text += `• Proizvodi: ${state.confirmed_products} potvrđenih, ${state.pending_products} čeka\n`;
-    text += `• Brand profil: ${state.brand_profile_ready ? "✅ Spreman" : "⏳ Nije spreman"}\n`;
-    text += `• Aktivni jobovi: ${state.active_jobs}\n\n`;
-
-    if (readiness.ready) {
-      text += `✅ **Spreman za generiranje!**`;
-    } else {
-      text += `⚠️ **Prije generiranja treba:**\n`;
-      readiness.missing.forEach((m) => (text += `• ${m}\n`));
+  // Try to find URL without protocol
+  const simplePattern = /(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}(\/[^\s<>"{}|\\^`\[\]]*)?/i;
+  const simpleMatch = text.match(simplePattern);
+  if (simpleMatch) {
+    let url = simpleMatch[0].replace(/[.,;:!?)]+$/, '');
+    if (!url.startsWith('http')) {
+      url = 'https://' + url;
     }
-
-    const chips: ChatChip[] = [];
-    if (!state.ig_connected) chips.push(chip.navigation("Poveži Instagram", "/settings"));
-    if (state.pending_products > 0) chips.push(chip.suggestion("Prikaži proizvode"));
-    if (readiness.ready) chips.push(chip.suggestion("Generiraj plan"));
-
-    return { handled: true, response: { text, chips } };
+    return url;
   }
-
-  // GENERIRAJ PLAN
-  if (/\b(generiraj|generate|kreiraj|napravi|stvori).*(plan|content|sadrzaj)/i.test(norm) ||
-      /\b(plan|content).*(generiraj|generate|kreiraj)/i.test(norm) ||
-      norm === "generiraj plan" || norm === "generiraj") {
-    const readiness = checkReadiness(state, sessionState);
-
-    if (!readiness.ready) {
-      let text = `⚠️ Ne mogu još generirati plan. Nedostaje:\n\n`;
-      readiness.missing.forEach((m) => (text += `• ${m}\n`));
-      text += `\nRiješi ovo prvo pa ćemo generirati!`;
-
-      const chips: ChatChip[] = [];
-      if (!state.ig_connected) chips.push(chip.navigation("Poveži Instagram", "/settings"));
-      if (readiness.missing.includes("Tip profila")) {
-        chips.push(chip.onboarding("🏷️ Product brand", "profile_type", "product"));
-        chips.push(chip.onboarding("🌿 Lifestyle", "profile_type", "lifestyle"));
-      }
-
-      return { handled: true, response: { text, chips } };
-    }
-
-    // Warnings but can proceed
-    if (readiness.warnings.length > 0) {
-      let text = `⚠️ Mogu generirati, ali:\n`;
-      readiness.warnings.forEach((w) => (text += `• ${w}\n`));
-      text += `\nŽeliš li nastaviti svejedno?`;
-
-      return {
-        handled: true,
-        response: {
-          text,
-          chips: [
-            chip.suggestion("Da, generiraj svejedno"),
-            chip.suggestion("Ne, prvo ću popraviti"),
-          ],
-        },
-      };
-    }
-
-    // All good - generate!
-    const month = new Date().toISOString().slice(0, 7);
-    await qLLM.add("plan.generate", { project_id: PROJECT_ID, month, limit: null });
-
-    return {
-      handled: true,
-      response: {
-        text: `🚀 Generiram plan za ${month}!\n\nOvo može potrajati nekoliko minuta. Obavijestit ću te kad bude gotovo.`,
-        chips: [chip.navigation("Otvori Calendar", "/calendar")],
-      },
-    };
-  }
-
-  // FORCE GENERATE (after warning)
-  if (/\b(da.*generiraj|generiraj.*svejedno)\b/.test(norm)) {
-    const month = new Date().toISOString().slice(0, 7);
-    await qLLM.add("plan.generate", { project_id: PROJECT_ID, month, limit: null });
-
-    return {
-      handled: true,
-      response: {
-        text: `🚀 OK, generiram plan za ${month}!\n\nObavijestit ću te kad bude gotovo.`,
-        chips: [chip.navigation("Otvori Calendar", "/calendar")],
-      },
-    };
-  }
-
-  // PRIKAŽI PROIZVODE
-  if (/\b(prikazi|prikaz|show|lista|list).*(proizvod|product)/i.test(norm) || 
-      /\b(proizvod|product).*(prikazi|prikaz|show|lista)/i.test(norm) ||
-      /\b(prikazi|prikaz).*(preostal)/i.test(norm)) {
-    if (state.pending_products === 0 && state.confirmed_products === 0) {
-      return {
-        handled: true,
-        response: {
-          text: "Nema detektiranih proizvoda. Poveži Instagram ili dodaj ručno.",
-          chips: [chip.navigation("Poveži Instagram", "/settings")],
-        },
-      };
-    }
-
-    const products = await q<any>(
-      `SELECT id, product_name, category, confidence, status
-       FROM detected_products 
-       WHERE project_id = $1 
-       ORDER BY status ASC, confidence DESC
-       LIMIT 15`,
-      [PROJECT_ID]
-    );
-
-    let text = `📦 **Proizvodi:**\n\n`;
-    const chips: ChatChip[] = [];
-
-    const pending = products.filter((p: any) => p.status === "pending");
-    const confirmed = products.filter((p: any) => p.status === "confirmed");
-
-    if (pending.length > 0) {
-      text += `**Za potvrdu (${state.pending_products}):**\n`;
-      text += `_(Klikni ✓ za potvrdu, možeš potvrditi više proizvoda)_\n\n`;
-      pending.forEach((p: any) => {
-        text += `• ${p.product_name} (${p.category || "?"}) - ${Math.round((p.confidence || 0) * 100)}%\n`;
-        chips.push(chip.productConfirm(p.product_name, p.id));
-      });
-      chips.push(chip.suggestion("Potvrdi sve"));
-      chips.push(chip.suggestion("Gotovo s potvrdama"));
-    }
-
-    if (confirmed.length > 0) {
-      text += `\n**✅ Potvrđeni (${state.confirmed_products}):**\n`;
-      confirmed.slice(0, 5).forEach((p: any) => {
-        text += `• ${p.product_name}\n`;
-      });
-      if (state.confirmed_products > 5) {
-        text += `_(i još ${state.confirmed_products - 5})_\n`;
-      }
-    }
-
-    if (pending.length === 0 && confirmed.length > 0) {
-      text += `\n✅ Svi proizvodi su potvrđeni!`;
-      chips.push(chip.suggestion("Generiraj plan"));
-      chips.push(chip.suggestion("Status"));
-    }
-
-    return { handled: true, response: { text, chips } };
-  }
-
-  // POTVRDI SVE PROIZVODE
-  if (/\b(potvrdi|confirm).*(sve|all)/i.test(norm) || /\bpotvrdi\b.*\bproizvod/i.test(norm)) {
-    if (state.pending_products === 0) {
-      return {
-        handled: true,
-        response: { text: "Nema proizvoda za potvrdu!", chips: [chip.suggestion("Status")] },
-      };
-    }
-
-    await q(
-      `UPDATE detected_products SET status = 'confirmed'
-       WHERE project_id = $1 AND status = 'pending'`,
-      [PROJECT_ID]
-    );
-
-    await qBrandRebuild.add("brand.rebuild", {
-      project_id: PROJECT_ID,
-      trigger: "products_confirmed",
-    });
-
-    return {
-      handled: true,
-      response: {
-        text: `✅ Potvrdio sam ${state.pending_products} proizvoda!\n\nPokrećem rebuild brand profila...`,
-        chips: [chip.suggestion("Generiraj plan"), chip.navigation("Pogledaj Profil", "/profile")],
-      },
-    };
-  }
-
-  // POVEŽI INSTAGRAM
-  if (/\b(povezi|connect|spoji).*(insta|ig)/i.test(norm) ||
-      /\b(insta|ig).*(povezi|connect|spoji)/i.test(norm)) {
-    return {
-      handled: true,
-      response: {
-        text: `Otvori Settings i klikni "Connect Instagram". Nakon povezivanja, automatski ću povući tvoje objave i analizirati stil.`,
-        chips: [chip.navigation("Otvori Settings", "/settings")],
-      },
-    };
-  }
-
-  // EXPORT
-  if (/\b(export|izvoz|download)\b/.test(norm)) {
-    await qExport.add("export.pack", { project_id: PROJECT_ID, approved_only: true });
-    return {
-      handled: true,
-      response: {
-        text: "Pripremam export...",
-        chips: [chip.navigation("Otvori Export", "/export")],
-      },
-    };
-  }
-
-  // WEB SEARCH / SCRAPE
-  if (/\b(pretrazi|pretra[zž]i|search|scrape).*(web|stranicu|site)/i.test(norm) ||
-      /\b(web|stranicu|site).*(pretrazi|pretra[zž]i|search)/i.test(norm)) {
-    return {
-      handled: true,
-      response: {
-        text: `Koja je URL adresa tvoje web stranice?\n\n_(Npr. "www.skolskaknjiga.hr" ili samo "skolskaknjiga.hr")_`,
-        chips: [],
-      },
-    };
-  }
-
-  // DIRECT URL INPUT (detect URLs in message)
-  const urlMatch = norm.match(/(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+\.[a-zA-Z]{2,})(?:\/[^\s]*)?/i);
-  if (urlMatch && sessionState.step !== "web_url") {
-    // User entered a URL directly - trigger web scrape
-    let url = text.match(/(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)*/i)?.[0] || urlMatch[0];
-    if (!url.startsWith("http")) {
-      url = "https://" + url;
-    }
-
-    try {
-      const scrapeResponse = await fetch(`${process.env.APP_URL || 'http://localhost:3000'}/api/scrape/website`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-
-      const scrapeResult = await scrapeResponse.json();
-
-      if (scrapeResult.success) {
-        await updateSessionState(session_id, {
-          website_url: url,
-          brand_name: scrapeResult.data.brand_name || sessionState.brand_name,
-        });
-
-        let responseText = `🌐 **Pretražio sam ${url}!**\n\n`;
-        
-        if (scrapeResult.data.brand_name) {
-          responseText += `📋 Brend: **${scrapeResult.data.brand_name}**\n`;
-        }
-        if (scrapeResult.data.products_found > 0) {
-          responseText += `📦 Pronašao sam ${scrapeResult.data.products_found} novih proizvoda za potvrdu\n`;
-        }
-        if (scrapeResult.data.logo_url) {
-          responseText += `🖼️ Logo pronađen i spremljen\n`;
-        }
-        
-        const updatedState = await getSystemState();
-        const chips: ChatChip[] = [];
-        
-        if (updatedState.pending_products > 0) {
-          chips.push(chip.suggestion("Prikaži proizvode"));
-        }
-        chips.push(chip.suggestion("Status"));
-        
-        return {
-          handled: true,
-          response: { text: responseText, chips },
-        };
-      }
-    } catch (error: any) {
-      log("chat:web_scrape", "direct URL scrape failed", { error: error.message, url });
-      return {
-        handled: true,
-        response: {
-          text: `Pokušao sam pretražiti ${url}, ali nisam uspio: ${error.message}`,
-          chips: [chip.suggestion("Status"), chip.suggestion("Pomoć")],
-        },
-      };
-    }
-  }
-
-  // HELP
-  if (/\b(help|pomoc|pomozi|kako)\b/i.test(norm)) {
-    return {
-      handled: true,
-      response: {
-        text: `🤖 **Evo što mogu:**\n\n• **status** - pregled stanja\n• **poveži instagram** - povezivanje\n• **prikaži proizvode** - lista proizvoda\n• **potvrdi sve** - potvrdi sve proizvode\n• **generiraj plan** - kreiraj content\n• **export** - pripremi za download\n\nIli me pitaj bilo što! 😊`,
-        chips: [chip.suggestion("Status"), chip.suggestion("Generiraj plan")],
-      },
-    };
-  }
-
-  // PRODUCT CONFIRMATION ACKNOWLEDGMENT (after user clicks ✓ chip)
-  if (/\b(potvrdio|potvrdila|odbio|odbila)\b.*:/i.test(norm)) {
-    // User just confirmed/rejected a product via chip
-    // Show remaining products or continue flow
-    const updatedState = await getSystemState();
-    
-    if (updatedState.pending_products > 0) {
-      return {
-        handled: true,
-        response: {
-          text: `👍 Odlično! Još ${updatedState.pending_products} proizvoda za potvrdu.`,
-          chips: [
-            chip.suggestion("Prikaži preostale"),
-            chip.suggestion("Potvrdi sve preostale"),
-            chip.suggestion("Gotovo s potvrdama"),
-          ],
-        },
-      };
-    } else {
-      // All products confirmed
-      await qBrandRebuild.add("brand.rebuild", {
-        project_id: PROJECT_ID,
-        trigger: "products_confirmed",
-      });
-      
-      return {
-        handled: true,
-        response: {
-          text: `✅ Svi proizvodi potvrđeni!\n\nPokrećem rebuild brand profila...`,
-          chips: [chip.suggestion("Generiraj plan"), chip.suggestion("Status")],
-        },
-      };
-    }
-  }
-
-  // PRIKAŽI PREOSTALE (alias for prikaži proizvode)
-  if (/\b(prikazi|prikaz|show).*(preostal|remaining)/i.test(norm)) {
-    // Redirect to show products
-    norm = "prikazi proizvode";
-  }
-
-  // GOTOVO S POTVRDAMA
-  if (/\b(gotovo|done|zavrsi|završi).*(potvrda|confirm)/i.test(norm)) {
-    const updatedState = await getSystemState();
-    
-    if (updatedState.pending_products > 0) {
-      return {
-        handled: true,
-        response: {
-          text: `OK! Imaš još ${updatedState.pending_products} nepotvrđenih proizvoda, ali možemo nastaviti.\n\nKoji tip profila te najbolje opisuje?`,
-          chips: ONBOARDING_QUESTIONS.profile_type.chips,
-        },
-      };
-    }
-    
-    // Check readiness
-    const readiness = checkReadiness(updatedState, sessionState);
-    if (readiness.ready) {
-      return {
-        handled: true,
-        response: {
-          text: `🎉 Odlično! Spreman si za generiranje!`,
-          chips: [chip.suggestion("Generiraj plan")],
-        },
-      };
-    }
-    
-    return {
-      handled: true,
-      response: {
-        text: `OK! Nastavljamo s pitanjima.\n\nKoji tip profila te najbolje opisuje?`,
-        chips: ONBOARDING_QUESTIONS.profile_type.chips,
-      },
-    };
-  }
-
-  return { handled: false };
-}
-
-// ============================================================
-// ONBOARDING FSM
-// ============================================================
-
-async function handleOnboarding(
-  session_id: string,
-  text: string,
-  norm: string,
-  state: SystemState,
-  sessionState: SessionState
-): Promise<{ text: string; chips?: ChatChip[]; newStep?: string } | null> {
-  const step = sessionState.step;
-  const answeredQuestions = sessionState.answered_questions || [];
-
-  log("chat:fsm", "onboarding", { session_id, step, norm });
-
-  // GLOBAL: Handle profile type selection from anywhere
-  const profileTypeMatch = norm.match(/\b(product|lifestyle|creator|influencer|content|media)\b/i);
-  if (profileTypeMatch && !sessionState.profile_type) {
-    const typeMap: Record<string, string> = {
-      product: "product",
-      lifestyle: "lifestyle",
-      creator: "creator",
-      influencer: "creator",
-      content: "content",
-      media: "content",
-    };
-    
-    const profileType = typeMap[profileTypeMatch[1].toLowerCase()] || "product";
-    
-    await updateSessionState(session_id, {
-      profile_type: profileType,
-      step: "industry",
-      answered_questions: [...answeredQuestions, "profile_type"],
-    });
-
-    return {
-      text: `Odlično, **${profileType}** profil! 👍\n\nKoja je tvoja industrija ili kategorija?`,
-      chips: ONBOARDING_QUESTIONS.industry.chips,
-      newStep: "industry",
-    };
-  }
-
-  // GLOBAL: Handle industry selection from anywhere  
-  const industryMatch = norm.match(/\b(knjig|izdava|moda|odje|hran|restoran|tech|software|fit|zdravlj|uslug|services|books|fashion|food|fitness)\b/i);
-  if (industryMatch && sessionState.profile_type && !sessionState.industry) {
-    const industryMap: Record<string, string> = {
-      knjig: "books", izdava: "books", books: "books",
-      moda: "fashion", odje: "fashion", fashion: "fashion",
-      hran: "food", restoran: "food", food: "food",
-      tech: "tech", software: "tech",
-      fit: "fitness", zdravlj: "fitness", fitness: "fitness",
-      uslug: "services", services: "services",
-    };
-    
-    let industry = "other";
-    for (const [key, value] of Object.entries(industryMap)) {
-      if (norm.includes(key)) {
-        industry = value;
-        break;
-      }
-    }
-
-    await updateSessionState(session_id, {
-      industry: industry,
-      step: "goal",
-      answered_questions: [...answeredQuestions, "industry"],
-    });
-
-    return {
-      text: `Super! 📚\n\nKoji je tvoj glavni cilj za idući mjesec?`,
-      chips: ONBOARDING_QUESTIONS.goal.chips,
-      newStep: "goal",
-    };
-  }
-
-  // INIT - Waiting for IG connect or fallback choice
-  if (step === "init") {
-    // User chose to skip Instagram
-    if (norm.includes("preskoči") || norm.includes("nemam") || norm.includes("skip")) {
-      await updateSessionState(session_id, { step: "fallback_name" });
-      return {
-        text: `Nema problema! 👍\n\nKako se zove tvoj brend, firma ili profil?\n\n(Npr. "Školska knjiga", "Cafe Central", "Marko Fitness")`,
-        chips: [],
-        newStep: "fallback_name",
-      };
-    }
-
-    // User might have just connected IG - check
-    if (state.ig_connected) {
-      await updateSessionState(session_id, { step: "profile_type" });
-      return {
-        text: `Super! 🎉 Instagram je povezan!\n\nPokrećem analizu tvojih objava u pozadini...\n\nU međuvremenu, koji tip profila te najbolje opisuje?`,
-        chips: ONBOARDING_QUESTIONS.profile_type.chips,
-        newStep: "profile_type",
-      };
-    }
-
-    // Still waiting
-    return {
-      text: `Poveži Instagram u Settings za najbolje rezultate, ili odaberi "Preskoči" ako ga nemaš.`,
-      chips: [
-        chip.navigation("🔗 Poveži Instagram", "/settings"),
-        chip.onboarding("⏭️ Preskoči", "fallback_source", "skip"),
-      ],
-    };
-  }
-
-  // FALLBACK NAME - User entering brand name manually
-  if (step === "fallback_name") {
-    // Save brand name and move to profile type
-    const brandName = text.trim();
-    await updateSessionState(session_id, {
-      brand_name: brandName,
-      step: "fallback_source",
-      answered_questions: [...answeredQuestions, "brand_name"],
-    });
-
-    return {
-      text: `Super, **${brandName}**! 👍\n\nImaš li web stranicu koju mogu pretražiti za više informacija? Ili možeš uploadati slike.`,
-      chips: [
-        chip.onboarding("🌐 Da, imam web", "fallback_source", "web"),
-        chip.onboarding("📤 Uploadat ću slike", "fallback_source", "upload"),
-        chip.onboarding("⏭️ Preskoči, nastavi pitanja", "fallback_source", "skip_to_questions"),
-      ],
-      newStep: "fallback_source",
-    };
-  }
-
-  // FALLBACK SOURCE - Web or upload choice
-  if (step === "fallback_source") {
-    if (norm.includes("web") || norm.includes("stranicu")) {
-      await updateSessionState(session_id, { step: "web_url" });
-      return {
-        text: `Odlično! Koja je URL adresa tvoje web stranice?\n\n(Npr. "www.skolskaknjiga.hr" ili "skolskaknjiga.hr")`,
-        chips: [],
-        newStep: "web_url",
-      };
-    }
-
-    if (norm.includes("upload") || norm.includes("slike")) {
-      await updateSessionState(session_id, { step: "profile_type" });
-      return {
-        text: `Super! Slike možeš uploadati u Settings → Reference Images.\n\nU međuvremenu, koji tip profila te najbolje opisuje?`,
-        chips: [
-          ...ONBOARDING_QUESTIONS.profile_type.chips,
-          chip.navigation("📤 Upload slike", "/settings"),
-        ],
-        newStep: "profile_type",
-      };
-    }
-
-    // Skip to questions
-    await updateSessionState(session_id, { step: "profile_type" });
-    return {
-      text: `OK! Koji tip profila te najbolje opisuje?`,
-      chips: ONBOARDING_QUESTIONS.profile_type.chips,
-      newStep: "profile_type",
-    };
-  }
-
-  // WEB URL - User entering website
-  if (step === "web_url") {
-    // Extract URL from text
-    let url = text.trim();
-    if (!url.startsWith("http")) {
-      url = "https://" + url;
-    }
-
-    // Trigger web scrape
-    try {
-      const scrapeResponse = await fetch(`${process.env.APP_URL || 'http://localhost:3000'}/api/scrape/website`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-
-      const scrapeResult = await scrapeResponse.json();
-
-      if (scrapeResult.success) {
-        await updateSessionState(session_id, {
-          website_url: url,
-          brand_name: scrapeResult.data.brand_name,
-          step: "profile_type",
-          answered_questions: [...answeredQuestions, "website_url", "brand_name"],
-        });
-
-        let responseText = `🌐 **Web pretraga završena!**\n\n`;
-        
-        if (scrapeResult.data.brand_name) {
-          responseText += `📋 Brend: **${scrapeResult.data.brand_name}**\n`;
-        }
-        if (scrapeResult.data.about) {
-          responseText += `📝 ${scrapeResult.data.about.slice(0, 100)}...\n`;
-        }
-        if (scrapeResult.data.products_found > 0) {
-          responseText += `📦 Pronašao sam ${scrapeResult.data.products_found} proizvoda\n`;
-        }
-        if (scrapeResult.data.logo_url) {
-          responseText += `🖼️ Logo pronađen\n`;
-        }
-        
-        responseText += `\nKoji tip profila te najbolje opisuje?`;
-
-        return {
-          text: responseText,
-          chips: ONBOARDING_QUESTIONS.profile_type.chips,
-          newStep: "profile_type",
-        };
-      } else {
-        throw new Error(scrapeResult.error);
-      }
-    } catch (error: any) {
-      log("chat:web_scrape", "scrape failed", { error: error.message, url });
-      
-      await updateSessionState(session_id, {
-        website_url: url,
-        step: "profile_type",
-        answered_questions: [...answeredQuestions, "website_url"],
-      });
-
-      return {
-        text: `Spremio sam URL **${url}**, ali nisam mogao automatski izvući podatke (${error.message}).\n\nNema veze - nastavljamo!\n\nKoji tip profila te najbolje opisuje?`,
-        chips: ONBOARDING_QUESTIONS.profile_type.chips,
-        newStep: "profile_type",
-      };
-    }
-  }
-
-  // PROFILE TYPE - Required question
-  if (step === "profile_type") {
-    const typeMap: Record<string, string> = {
-      product: "product",
-      lifestyle: "lifestyle",
-      creator: "creator",
-      influencer: "creator",
-      content: "content",
-      media: "content",
-    };
-
-    let profileType = "product"; // default
-    for (const [key, value] of Object.entries(typeMap)) {
-      if (norm.includes(key)) {
-        profileType = value;
-        break;
-      }
-    }
-
-    await updateSessionState(session_id, {
-      profile_type: profileType,
-      step: "industry",
-      answered_questions: [...answeredQuestions, "profile_type"],
-    });
-
-    return {
-      text: `Odlično, **${profileType}** profil! 👍\n\nKoja je tvoja industrija ili kategorija?`,
-      chips: ONBOARDING_QUESTIONS.industry.chips,
-      newStep: "industry",
-    };
-  }
-
-  // INDUSTRY - Required question
-  if (step === "industry") {
-    const industryMap: Record<string, string> = {
-      knjig: "books",
-      izdava: "books",
-      moda: "fashion",
-      odje: "fashion",
-      hran: "food",
-      restoran: "food",
-      tech: "tech",
-      software: "tech",
-      fit: "fitness",
-      zdravlj: "fitness",
-      uslug: "services",
-    };
-
-    let industry = "other";
-    for (const [key, value] of Object.entries(industryMap)) {
-      if (norm.includes(key)) {
-        industry = value;
-        break;
-      }
-    }
-
-    await updateSessionState(session_id, {
-      industry: industry,
-      step: "goal",
-      answered_questions: [...answeredQuestions, "industry"],
-    });
-
-    return {
-      text: `Super! 📚\n\nKoji je tvoj glavni cilj za idući mjesec?`,
-      chips: ONBOARDING_QUESTIONS.goal.chips,
-      newStep: "goal",
-    };
-  }
-
-  // GOAL - Required question
-  if (step === "goal") {
-    const goalMap: Record<string, string> = {
-      engagement: "engagement",
-      engage: "engagement",
-      rast: "growth",
-      pratitelj: "growth",
-      promo: "promotion",
-      proizvod: "promotion",
-      story: "authority",
-      autoritet: "authority",
-    };
-
-    let goal = "engagement";
-    for (const [key, value] of Object.entries(goalMap)) {
-      if (norm.includes(key)) {
-        goal = value;
-        break;
-      }
-    }
-
-    await updateSessionState(session_id, {
-      goal: goal,
-      step: "check_products",
-      answered_questions: [...answeredQuestions, "goal"],
-    });
-
-    // After required questions, check if we should ask about products
-    const updatedState = await getSystemState();
-
-    if (updatedState.pending_products > 0 && !sessionState.products_notified) {
-      await updateSessionState(session_id, { step: "confirm_products", products_notified: true });
-      return {
-        text: `Odlično! Cilj: **${goal}** 🎯\n\nUsput, pronašao sam **${updatedState.pending_products} proizvoda** iz tvojih objava. Želiš li ih pregledati i potvrditi?`,
-        chips: [
-          chip.suggestion("Prikaži proizvode"),
-          chip.suggestion("Potvrdi sve"),
-          chip.suggestion("Preskoči za sad"),
-        ],
-        newStep: "confirm_products",
-      };
-    }
-
-    // No products, go to optional questions or ready
-    const readiness = checkReadiness(updatedState, {
-      ...sessionState,
-      goal,
-      answered_questions: [...answeredQuestions, "goal"],
-    });
-
-    if (readiness.ready) {
-      await updateSessionState(session_id, { step: "ready" });
-      return {
-        text: `Odlično! 🎉 Sve je spremno!\n\n✅ Obavezni podaci prikupljeni\n${readiness.warnings.length > 0 ? `⚠️ ${readiness.warnings.join(", ")}\n` : ""}\nŽeliš li generirati plan?`,
-        chips: [chip.suggestion("Generiraj plan"), chip.suggestion("Status")],
-        newStep: "ready",
-      };
-    }
-
-    // Missing something, ask optional or show missing
-    await updateSessionState(session_id, { step: "optional_questions" });
-    return {
-      text: `Super! Još par pitanja dok čekamo da se analiza završi...\n\n${OPTIONAL_QUESTIONS[0].text}`,
-      chips: OPTIONAL_QUESTIONS[0].chips,
-      newStep: "optional_questions",
-    };
-  }
-
-  // CONFIRM PRODUCTS
-  if (step === "confirm_products") {
-    // Let command handler deal with product-related commands
-    if (norm.includes("prikaz") || norm.includes("proizvod") || norm.includes("potvrdi") || norm.includes("confirm")) {
-      return null; // Pass to command handler
-    }
-    
-    if (norm.includes("preskoci") || norm.includes("skip") || norm.includes("nastavi")) {
-      await updateSessionState(session_id, { step: "profile_type" });
-      const updatedState = await getSystemState();
-      const readiness = checkReadiness(updatedState, sessionState);
-
-      if (readiness.ready) {
-        await updateSessionState(session_id, { step: "ready" });
-        return {
-          text: `OK! Možeš ih potvrditi kasnije.\n\n🎉 Spreman si za generiranje!`,
-          chips: [chip.suggestion("Generiraj plan")],
-          newStep: "ready",
-        };
-      }
-
-      return {
-        text: `OK! Idemo dalje.\n\nKoji tip profila te najbolje opisuje?`,
-        chips: ONBOARDING_QUESTIONS.profile_type.chips,
-        newStep: "profile_type",
-      };
-    }
-    
-    // Unknown input in this step - guide user
-    return {
-      text: `Imaš ${state.pending_products} proizvoda za potvrdu. Što želiš napraviti?`,
-      chips: [
-        chip.suggestion("Prikaži proizvode"),
-        chip.suggestion("Potvrdi sve"),
-        chip.suggestion("Preskoči za sad"),
-      ],
-    };
-  }
-
-  // OPTIONAL QUESTIONS
-  if (step === "optional_questions") {
-    const optIndex = sessionState.optional_question_index || 0;
-
-    // Save previous answer if we can determine which question it was
-    const currentQuestion = OPTIONAL_QUESTIONS[optIndex];
-    if (currentQuestion) {
-      await updateSessionState(session_id, {
-        [currentQuestion.id]: text,
-        answered_questions: [...answeredQuestions, currentQuestion.id],
-        optional_question_index: optIndex + 1,
-      });
-    }
-
-    // Check system state - maybe job finished
-    const updatedState = await getSystemState();
-
-    // If products appeared AND we haven't notified yet, interrupt and ask
-    if (updatedState.pending_products > 0 && 
-        !answeredQuestions.includes("products_notified") &&
-        !sessionState.products_notified) {
-      await updateSessionState(session_id, {
-        step: "confirm_products",
-        products_notified: true,
-        answered_questions: [...answeredQuestions, currentQuestion?.id, "products_notified"].filter(Boolean),
-      });
-      return {
-        text: `🔔 **Analiza otkrila proizvode!** Pronašao sam **${updatedState.pending_products} proizvoda**.\n\nŽeliš li ih pregledati?`,
-        chips: [
-          chip.suggestion("Prikaži proizvode"),
-          chip.suggestion("Potvrdi sve"),
-          chip.suggestion("Nastavi pitanja"),
-        ],
-        newStep: "confirm_products",
-      };
-    }
-
-    // Check readiness
-    const readiness = checkReadiness(updatedState, sessionState);
-
-    if (readiness.ready) {
-      await updateSessionState(session_id, { step: "ready" });
-      return {
-        text: `🎉 Hvala na odgovorima! Sve je spremno za generiranje.\n\n${readiness.warnings.length > 0 ? `Napomena: ${readiness.warnings.join(", ")}` : ""}`,
-        chips: [chip.suggestion("Generiraj plan"), chip.navigation("Otvori Calendar", "/calendar")],
-        newStep: "ready",
-      };
-    }
-
-    // More optional questions?
-    const nextIndex = optIndex + 1;
-    if (nextIndex < OPTIONAL_QUESTIONS.length) {
-      return {
-        text: `Hvala! ${OPTIONAL_QUESTIONS[nextIndex].text}`,
-        chips: OPTIONAL_QUESTIONS[nextIndex].chips,
-      };
-    }
-
-    // No more questions - show progress
-    await updateSessionState(session_id, { step: "waiting_jobs" });
-    return {
-      text: `Hvala na svim odgovorima! 🙏\n\n⏳ Čekamo da se analiza završi...\n\n📊 Progress:\n• Slike: ${updatedState.media_analyzed}/${updatedState.media_count}\n• Aktivni jobovi: ${updatedState.active_jobs}\n\nJavim ti kad bude gotovo!`,
-      chips: [chip.suggestion("Status"), chip.navigation("Pogledaj Settings", "/settings")],
-      newStep: "waiting_jobs",
-    };
-  }
-
-  // WAITING FOR JOBS
-  if (step === "waiting_jobs") {
-    const updatedState = await getSystemState();
-
-    if (updatedState.pending_products > 0) {
-      await updateSessionState(session_id, { step: "confirm_products" });
-      return {
-        text: `🔔 Analiza gotova! Pronašao sam **${updatedState.pending_products} proizvoda**.`,
-        chips: [chip.suggestion("Prikaži proizvode"), chip.suggestion("Potvrdi sve")],
-        newStep: "confirm_products",
-      };
-    }
-
-    const readiness = checkReadiness(updatedState, sessionState);
-    if (readiness.ready) {
-      await updateSessionState(session_id, { step: "ready" });
-      return {
-        text: `🎉 Sve je spremno!`,
-        chips: [chip.suggestion("Generiraj plan")],
-        newStep: "ready",
-      };
-    }
-
-    return {
-      text: `⏳ Još uvijek čekam...\n\n• Slike: ${updatedState.media_analyzed}/${updatedState.media_count}\n• Jobovi: ${updatedState.active_jobs} aktivnih\n\nMožeš se vratiti za par minuta.`,
-      chips: [chip.suggestion("Status")],
-    };
-  }
-
-  // READY
-  if (step === "ready") {
-    // User is chatting after being ready - treat as general conversation
-    return null;
-  }
-
+  
   return null;
 }
 
 // ============================================================
-// MAIN HANDLER
+// Web Scraping
 // ============================================================
-
-export async function POST(req: Request) {
+async function scrapeWebsite(url: string): Promise<{
+  success: boolean;
+  data?: {
+    title?: string;
+    description?: string;
+    products?: string[];
+    colors?: string[];
+    logo?: string;
+  };
+  error?: string;
+}> {
   try {
-    const body = await req.json();
-    log("api:chat", "POST /api/chat/message", body);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const { session_id, text } = body as { session_id: string; text: string };
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "hr,en;q=0.9"
+      },
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeoutId));
 
-    if (!session_id || !text) {
-      return NextResponse.json({ error: "session_id and text required" }, { status: 400 });
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
     }
 
-    // Save user message
-    await pushMessage(session_id, "user", text);
+    const html = await response.text();
 
-    const norm = normalize(text);
-    const state = await getSystemState();
-    const sessionState = await getSessionState(session_id);
+    // Extract title
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+    const title = ogTitleMatch?.[1] || titleMatch?.[1] || undefined;
 
-    // 1. Try command handlers first
-    const cmdResult = await handleCommand(norm, session_id, state, sessionState);
-    if (cmdResult.handled && cmdResult.response) {
-      const a = await pushMessage(session_id, "assistant", cmdResult.response.text, cmdResult.response.chips || null);
-      return NextResponse.json({ new_messages: [a] });
-    }
+    // Extract description
+    const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+                      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+    const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+    const description = ogDescMatch?.[1] || descMatch?.[1] || undefined;
 
-    // 2. Try onboarding FSM
-    const onboardingResult = await handleOnboarding(session_id, text, norm, state, sessionState);
-    if (onboardingResult) {
-      if (onboardingResult.newStep) {
-        await updateSessionState(session_id, { step: onboardingResult.newStep });
+    // Extract potential products/categories from navigation and headings
+    const products: string[] = [];
+    
+    // Look for category links
+    const categoryMatches = html.matchAll(/<a[^>]+href=["'][^"']*(?:category|kategorija|proizvod|product)[^"']*["'][^>]*>([^<]+)</gi);
+    for (const match of categoryMatches) {
+      const text = match[1].trim();
+      if (text && text.length > 2 && text.length < 50 && !products.includes(text)) {
+        products.push(text);
       }
-      const a = await pushMessage(session_id, "assistant", onboardingResult.text, onboardingResult.chips || null);
-      return NextResponse.json({ new_messages: [a] });
     }
 
-    // 3. Fallback
-    const fallbackChips = [chip.suggestion("Status"), chip.suggestion("Pomoć")];
-
-    if (!state.ig_connected) {
-      fallbackChips.unshift(chip.navigation("Poveži Instagram", "/settings"));
+    // Look for navigation items
+    const navMatches = html.matchAll(/<nav[^>]*>([\s\S]*?)<\/nav>/gi);
+    for (const nav of navMatches) {
+      const linkMatches = nav[1].matchAll(/<a[^>]*>([^<]+)</g);
+      for (const link of linkMatches) {
+        const text = link[1].trim();
+        if (text && text.length > 2 && text.length < 30 && !products.includes(text) && 
+            !text.toLowerCase().includes('login') && !text.toLowerCase().includes('prijav') &&
+            !text.toLowerCase().includes('kontakt') && !text.toLowerCase().includes('o nama')) {
+          products.push(text);
+        }
+      }
     }
 
-    const readiness = checkReadiness(state, sessionState);
-    if (readiness.ready) {
-      fallbackChips.push(chip.suggestion("Generiraj plan"));
+    // Extract theme color
+    const colors: string[] = [];
+    const themeColorMatch = html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)["']/i);
+    if (themeColorMatch?.[1]) {
+      colors.push(themeColorMatch[1]);
+    }
+
+    // Look for brand colors in inline styles
+    const colorMatches = html.matchAll(/(?:background-color|color)\s*:\s*(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})/g);
+    const colorCounts: Record<string, number> = {};
+    for (const match of colorMatches) {
+      const color = match[1].toUpperCase();
+      if (color !== '#FFFFFF' && color !== '#FFF' && color !== '#000000' && color !== '#000') {
+        colorCounts[color] = (colorCounts[color] || 0) + 1;
+      }
+    }
+    
+    // Get top colors
+    const topColors = Object.entries(colorCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([color]) => color);
+    colors.push(...topColors);
+
+    return {
+      success: true,
+      data: {
+        title: title?.substring(0, 100),
+        description: description?.substring(0, 200),
+        products: products.slice(0, 10),
+        colors: [...new Set(colors)].slice(0, 5)
+      }
+    };
+
+  } catch (error: any) {
+    log("scrape:website", "error", { url, error: error.message });
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================
+// Check onboarding progress and requirements
+// ============================================================
+async function checkProgress(
+  project_id: string,
+  session_state: any
+): Promise<GenerationRequirements> {
+  const missing: string[] = [];
+
+  // Check project status
+  const project = await q<any>(
+    `SELECT ig_connected FROM projects WHERE id = $1`,
+    [project_id]
+  );
+  const ig_connected = project[0]?.ig_connected || false;
+
+  // Check reference images
+  const images = await q<any>(
+    `SELECT COUNT(*) as count FROM assets WHERE project_id = $1 AND type = 'image'`,
+    [project_id]
+  );
+  const has_reference_image = Number(images[0]?.count) > 0;
+
+  // Check products
+  const products = await q<any>(
+    `SELECT COUNT(*) as total,
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
+     FROM detected_products WHERE project_id = $1`,
+    [project_id]
+  );
+  const has_products = Number(products[0]?.total) > 0;
+  const has_confirmed_products = Number(products[0]?.confirmed) > 0;
+
+  // Check session state for onboarding answers
+  const has_goal = !!session_state?.goal;
+  const has_profile_type = !!session_state?.profile_type;
+  const has_focus = !!session_state?.focus;
+
+  // Check if analysis is complete
+  const analyses = await q<any>(
+    `SELECT COUNT(*) as count FROM instagram_analyses ia
+     JOIN assets a ON a.id = ia.asset_id
+     WHERE a.project_id = $1`,
+    [project_id]
+  );
+  const analysis_complete = Number(analyses[0]?.count) > 0;
+
+  const progress: OnboardingProgress = {
+    ig_connected,
+    has_reference_image,
+    has_products,
+    has_confirmed_products,
+    has_goal,
+    has_profile_type,
+    has_focus,
+    analysis_complete
+  };
+
+  // Build missing list
+  const hasVisualReference = has_reference_image || has_products;
+  const hasConfirmedReference = has_confirmed_products || has_reference_image;
+
+  if (!hasVisualReference) {
+    missing.push("referentna slika ili proizvod");
+  }
+
+  if (has_products && !has_confirmed_products && !has_reference_image) {
+    missing.push("potvrđen barem jedan proizvod");
+  }
+
+  if (!has_goal) missing.push("cilj profila");
+  if (!has_profile_type) missing.push("tip profila");
+  if (!has_focus) missing.push("fokus sadržaja");
+
+  const canGenerate = hasVisualReference && hasConfirmedReference && has_goal && has_profile_type && has_focus;
+
+  return { canGenerate, missing, progress };
+}
+
+// ============================================================
+// Build onboarding progress indicator
+// ============================================================
+function buildProgressIndicator(progress: OnboardingProgress): string {
+  const items = [
+    { done: progress.ig_connected || progress.has_reference_image, label: "Vizualna referenca" },
+    { done: progress.has_goal, label: "Cilj" },
+    { done: progress.has_profile_type, label: "Tip profila" },
+    { done: progress.has_focus, label: "Fokus" },
+    { done: progress.has_confirmed_products || progress.has_reference_image, label: "Proizvodi/reference" }
+  ];
+
+  const completed = items.filter(i => i.done).length;
+  const total = items.length;
+
+  let indicator = `📊 Napredak: ${completed}/${total}\n`;
+  for (const item of items) {
+    indicator += item.done ? `✅ ${item.label}\n` : `⬜ ${item.label}\n`;
+  }
+
+  return indicator;
+}
+
+// ============================================================
+// Get next onboarding step chips
+// ============================================================
+function getNextOnboardingChips(progress: OnboardingProgress, ig_connected: boolean): any[] {
+  const chips: any[] = [];
+
+  if (!progress.has_goal) {
+    chips.push(
+      { type: "onboarding_option", label: "Više engagementa", value: "cilj: engagement" },
+      { type: "onboarding_option", label: "Izgradnja brenda", value: "cilj: branding" },
+      { type: "onboarding_option", label: "Promocija proizvoda", value: "cilj: promotion" },
+      { type: "onboarding_option", label: "Mix svega", value: "cilj: mix" }
+    );
+    return chips;
+  }
+
+  if (!progress.has_profile_type) {
+    chips.push(
+      { type: "onboarding_option", label: "🏷️ Product brand", value: "profil: product_brand" },
+      { type: "onboarding_option", label: "🌿 Lifestyle", value: "profil: lifestyle" },
+      { type: "onboarding_option", label: "👤 Creator", value: "profil: creator" },
+      { type: "onboarding_option", label: "📄 Content/Media", value: "profil: content_media" }
+    );
+    return chips;
+  }
+
+  if (!progress.has_focus) {
+    chips.push(
+      { type: "onboarding_option", label: "📈 Engagement", value: "fokus: engagement" },
+      { type: "onboarding_option", label: "🚀 Rast", value: "fokus: growth" },
+      { type: "onboarding_option", label: "🛒 Promocija", value: "fokus: promotion" },
+      { type: "onboarding_option", label: "📖 Storytelling", value: "fokus: storytelling" }
+    );
+    return chips;
+  }
+
+  // All basic info done, check visual reference
+  if (!progress.has_reference_image && !progress.has_products) {
+    if (!ig_connected) {
+      chips.push(
+        { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+        { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" },
+        { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" }
+      );
+    } else {
+      chips.push(
+        { type: "suggestion", label: "Uploaj dodatne slike", value: "uploaj slike" }
+      );
+    }
+    return chips;
+  }
+
+  // Has products but none confirmed
+  if (progress.has_products && !progress.has_confirmed_products) {
+    chips.push(
+      { type: "suggestion", label: "Prikaži proizvode", value: "prikaži proizvode" }
+    );
+    return chips;
+  }
+
+  // Ready to generate
+  chips.push(
+    { type: "suggestion", label: "🚀 Generiraj plan", value: "generiraj plan sada" }
+  );
+
+  return chips;
+}
+
+// ============================================================
+// Get pending products
+// ============================================================
+async function getPendingProducts(project_id: string, limit: number = 10) {
+  return await q<any>(
+    `SELECT DISTINCT ON (product_name) 
+       id, product_name, category, confidence
+     FROM detected_products
+     WHERE project_id = $1 AND status = 'pending'
+     ORDER BY product_name, confidence DESC
+     LIMIT $2`,
+    [project_id, limit]
+  );
+}
+
+// ============================================================
+// Build product chips
+// ============================================================
+function buildProductChips(products: any[]) {
+  const chips: any[] = [];
+  for (const p of products) {
+    chips.push({
+      type: "product_confirm",
+      label: `☐ ${p.product_name}`,
+      productId: p.id,
+      action: "confirm"
+    });
+  }
+  if (products.length > 0) {
+    chips.push(
+      { type: "suggestion", label: "✓ Potvrdi sve", value: "potvrdi sve proizvode" },
+      { type: "suggestion", label: "➜ Nastavi", value: "nastavi s generiranjem" }
+    );
+  }
+  return chips;
+}
+
+// ============================================================
+// Perform web scraping
+// ============================================================
+async function performScraping(username: string): Promise<{
+  success: boolean;
+  data?: any;
+  source: string;
+  error?: string;
+  needsMoreInfo?: boolean;
+}> {
+  try {
+    const url = `https://www.instagram.com/${username}/`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.5"
+      },
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeoutId));
+
+    if (!response.ok) {
+      throw new Error(`Instagram returned ${response.status}`);
+    }
+
+    const html = await response.text();
+
+    if (html.includes("Sorry, this page") || html.includes("Page Not Found")) {
+      return { success: false, source: "instagram", error: "Profil ne postoji" };
+    }
+
+    const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
+    const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/);
+
+    if (descMatch) {
+      const desc = descMatch[1];
+      const statsMatch = desc.match(/(\d+(?:[,.]?\d+)*[KM]?)\s*Followers/i);
+      const postsMatch = desc.match(/(\d+(?:[,.]?\d+)*)\s*Posts/i);
+      const bioMatch = desc.split(" - ").slice(1).join(" - ");
+
+      const data = {
+        full_name: titleMatch ? titleMatch[1].split("(")[0].trim() : username,
+        bio: bioMatch || null,
+        followers: statsMatch ? statsMatch[1] : null,
+        posts_count: postsMatch ? postsMatch[1] : null
+      };
+
+      const needsMoreInfo = !data.bio || !data.followers;
+
+      return {
+        success: true,
+        source: "instagram",
+        data,
+        needsMoreInfo
+      };
+    }
+
+    return estimateFromUsername(username);
+
+  } catch (error: any) {
+    log("scrape", "error", { username, error: error.message });
+    return estimateFromUsername(username);
+  }
+}
+
+function estimateFromUsername(username: string): {
+  success: boolean;
+  data: any;
+  source: string;
+  needsMoreInfo: boolean;
+} {
+  const lower = username.toLowerCase();
+  let niche = "general";
+  let style = "mixed";
+
+  if (lower.includes("knjig") || lower.includes("book")) {
+    niche = "books/publishing";
+    style = "educational";
+  } else if (lower.includes("shop") || lower.includes("store")) {
+    niche = "e-commerce";
+    style = "product-focused";
+  } else if (lower.includes("food") || lower.includes("cook")) {
+    niche = "food";
+    style = "lifestyle";
+  }
+
+  return {
+    success: true,
+    source: "estimation",
+    data: { estimated_niche: niche, estimated_style: style },
+    needsMoreInfo: true
+  };
+}
+
+// ============================================================
+// POST /api/chat/message
+// ============================================================
+export async function POST(req: Request) {
+  const body = await req.json();
+  log("api:chat", "POST /api/chat/message", body);
+
+  const { session_id, text } = body as { session_id: string; text: string };
+
+  if (!session_id || !text) {
+    return NextResponse.json({ error: "session_id and text required" }, { status: 400 });
+  }
+
+  await pushMessage(session_id, "user", text);
+
+  const norm = normalize(text);
+
+  // Get session state
+  const sess = (await q<any>(`SELECT state FROM chat_sessions WHERE id=$1`, [session_id]))[0];
+  const state = sess?.state ?? {};
+  const step = state?.step ?? "init";
+
+  // Get project status
+  const project = await q<any>(`SELECT ig_connected FROM projects WHERE id = $1`, [PROJECT_ID]);
+  const ig_connected = project[0]?.ig_connected || false;
+
+  log("chat:fsm", "state", { session_id, step, norm, ig_connected });
+
+  // =========================
+  // GLOBAL: Handle Instagram connected from any step
+  // =========================
+  if ((norm.includes("spojen") || norm.includes("connected") || norm.includes("uspješno")) && 
+      norm.includes("instagram")) {
+    // Always move to onboarding after IG connection
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "onboarding", ig_connected: true }), session_id]
+    );
+
+    const requirements = await checkProgress(PROJECT_ID, { ...state, ig_connected: true });
+    const chips = getNextOnboardingChips(requirements.progress, true);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `✅ Super! Instagram je uspješno povezan! 🎉\n\nPokrećem analizu tvojih objava u pozadini...\n\n${progressText}\nU međuvremenu, reci mi cilj tvog profila za idući mjesec:`,
+      { chips }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // GLOBAL: Handle onboarding answers from any step
+  // =========================
+  
+  // Goal answer
+  if (norm.startsWith("cilj:") || (!state.goal && (
+    norm.includes("engagement") || norm.includes("branding") || 
+    norm.includes("promocij") || norm.includes("mix")
+  ))) {
+    const goal = norm.replace("cilj:", "").trim() || norm;
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, goal, step: "onboarding" }), session_id]
+    );
+
+    const requirements = await checkProgress(PROJECT_ID, { ...state, goal });
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    let nextQuestion = "Koji tip profila te najbolje opisuje?";
+    if (requirements.progress.has_profile_type) {
+      nextQuestion = "Na što se fokusiramo u idućih 30 dana?";
     }
 
     const a = await pushMessage(
       session_id,
       "assistant",
-      `Nisam siguran što želiš. Napiši "status", "generiraj plan", ili "pomoć" za listu naredbi.`,
-      fallbackChips
+      `✅ Cilj zabilježen: ${goal}\n\n${progressText}\n${nextQuestion}`,
+      { chips }
     );
 
     return NextResponse.json({ new_messages: [a] });
-  } catch (error: any) {
-    log("api:chat:message", "error", { error: error.message });
-    return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Profile type answer
+  if (norm.startsWith("profil:") || (!state.profile_type && (
+    norm.includes("product") || norm.includes("lifestyle") || 
+    norm.includes("creator") || norm.includes("content")
+  ))) {
+    let profileType = "product_brand";
+    if (norm.includes("lifestyle")) profileType = "lifestyle";
+    else if (norm.includes("creator")) profileType = "creator";
+    else if (norm.includes("content") || norm.includes("media")) profileType = "content_media";
+
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, profile_type: profileType, step: "onboarding" }), session_id]
+    );
+
+    const requirements = await checkProgress(PROJECT_ID, { ...state, profile_type: profileType });
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `✅ Tip profila: ${profileType}\n\n${progressText}\nNa što se fokusiramo u idućih 30 dana?`,
+      { chips }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Focus answer
+  if (norm.startsWith("fokus:") || (!state.focus && (
+    norm.includes("engagement") || norm.includes("rast") || norm.includes("growth") ||
+    norm.includes("promocij") || norm.includes("storytelling")
+  ))) {
+    const focus = norm.replace("fokus:", "").trim() || norm;
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, focus, step: "onboarding" }), session_id]
+    );
+
+    const requirements = await checkProgress(PROJECT_ID, { ...state, focus });
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    let message = `✅ Fokus: ${focus}\n\n${progressText}\n`;
+
+    if (requirements.canGenerate) {
+      message += "🎉 Sve je spremno! Možeš pokrenuti generiranje.";
+    } else if (requirements.progress.has_products && !requirements.progress.has_confirmed_products) {
+      message += "Sada potvrdi proizvode koje želiš koristiti.";
+    } else if (!requirements.progress.has_reference_image && !requirements.progress.has_products) {
+      message += "Trebam još vizualnu referencu (sliku ili proizvod).";
+    }
+
+    const a = await pushMessage(session_id, "assistant", message, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // GLOBAL COMMANDS
+  // =========================
+
+  // Prikaži proizvode
+  if (norm.includes("prikaži") && norm.includes("proizvod")) {
+    const pendingProducts = await getPendingProducts(PROJECT_ID);
+
+    if (pendingProducts.length === 0) {
+      const requirements = await checkProgress(PROJECT_ID, state);
+      const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Nema pronađenih proizvoda za potvrdu. " + 
+        (ig_connected ? "Čekam završetak analize..." : "Poveži Instagram ili uploaj slike."),
+        { chips }
+      );
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    const chips = buildProductChips(pendingProducts);
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `🏷️ Pronađeno ${pendingProducts.length} proizvoda. Klikni za potvrdu:\n\n${pendingProducts.map((p: any) => `• ${p.product_name}`).join('\n')}\n\nNakon odabira klikni "Nastavi".`,
+      { chips }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Potvrdi sve proizvode
+  if (norm.includes("potvrdi sve")) {
+    await q(
+      `UPDATE detected_products SET status = 'confirmed' WHERE project_id = $1 AND status = 'pending'`,
+      [PROJECT_ID]
+    );
+
+    const requirements = await checkProgress(PROJECT_ID, state);
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    let message = `✅ Svi proizvodi potvrđeni!\n\n${progressText}\n`;
+    if (requirements.canGenerate) {
+      message += "🎉 Spremno za generiranje!";
+    }
+
+    const a = await pushMessage(session_id, "assistant", message, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Nastavi s generiranjem
+  if (norm.includes("nastavi") && (norm.includes("generiranj") || norm.includes("dalje"))) {
+    const requirements = await checkProgress(PROJECT_ID, state);
+
+    if (!requirements.canGenerate) {
+      const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+      const progressText = buildProgressIndicator(requirements.progress);
+
+      let message = `⚠️ Još ne mogu generirati.\n\n${progressText}\n`;
+      if (!requirements.progress.has_goal) {
+        message += "Reci mi cilj tvog profila:";
+      } else if (!requirements.progress.has_profile_type) {
+        message += "Koji tip profila te opisuje?";
+      } else if (!requirements.progress.has_focus) {
+        message += "Na što se fokusiramo?";
+      } else {
+        message += "Nedostaje: " + requirements.missing.join(", ");
+      }
+
+      const a = await pushMessage(session_id, "assistant", message, { chips });
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `✅ Sve spremno!\n\nPokrećem generiranje plana?`,
+      {
+        chips: [
+          { type: "suggestion", label: "🚀 Da, generiraj!", value: "generiraj plan sada" },
+          { type: "suggestion", label: "Prikaži proizvode", value: "prikaži proizvode" }
+        ]
+      }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Generiraj plan
+  if (norm.includes("generiraj") || norm.includes("generate")) {
+    const requirements = await checkProgress(PROJECT_ID, state);
+    const userConfirmed = norm.includes("sada") || norm.includes("da");
+
+    if (!requirements.canGenerate) {
+      const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+      const progressText = buildProgressIndicator(requirements.progress);
+
+      let message = `⚠️ Još ne mogu generirati.\n\n${progressText}\n`;
+      
+      if (!requirements.progress.has_goal) {
+        message += "Reci mi cilj tvog profila za idući mjesec:";
+      } else if (!requirements.progress.has_profile_type) {
+        message += "Koji tip profila te najbolje opisuje?";
+      } else if (!requirements.progress.has_focus) {
+        message += "Na što se fokusiramo u idućih 30 dana?";
+      } else if (requirements.progress.has_products && !requirements.progress.has_confirmed_products) {
+        message += "Potvrdi proizvode koje želiš koristiti.";
+      } else {
+        message += "Nedostaje: " + requirements.missing.join(", ");
+      }
+
+      const a = await pushMessage(session_id, "assistant", message, { chips });
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    if (!userConfirmed) {
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "ready_to_generate" }), session_id]
+      );
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        `✅ Sve spremno!\n\nPokrećem generiranje?`,
+        {
+          chips: [
+            { type: "suggestion", label: "🚀 Da, generiraj!", value: "generiraj plan sada" },
+            { type: "suggestion", label: "Prikaži proizvode", value: "prikaži proizvode" }
+          ]
+        }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Execute generation
+    const month = new Date().toISOString().slice(0, 7);
+    await qLLM.add("plan.generate", {
+      project_id: PROJECT_ID,
+      month,
+      limit: state.horizon === 7 ? 7 : null
+    });
+
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "generating" }), session_id]
+    );
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `🎉 Generiram plan za ${month}!\n\n• Planiranje sadržaja\n• Pisanje captiona\n• Generiranje vizuala\n\nDobit ćeš obavijest kad bude gotovo.`,
+      { chips: [{ type: "navigation", label: "Otvori Calendar", href: "/calendar" }] }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Export
+  if (norm.includes("export")) {
+    await qExport.add("export.pack", { project_id: PROJECT_ID, approved_only: true });
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      "Pripremam export. Otvori Export page za download.",
+      { chips: [{ type: "navigation", label: "Otvori Export", href: "/export" }] }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Connect Instagram - only if not already connected
+  if (norm.includes("pove") && norm.includes("insta")) {
+    if (ig_connected) {
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "✅ Instagram je već povezan! Analiza je u tijeku.\n\nU međuvremenu, odgovori na nekoliko pitanja:",
+        { chips: getNextOnboardingChips((await checkProgress(PROJECT_ID, state)).progress, true) }
+      );
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      "Otvori Settings i klikni \"Connect Instagram\".",
+      { chips: [{ type: "navigation", label: "Otvori Settings", href: "/settings" }] }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Web stranica / website URL
+  if (norm.includes("web") && (norm.includes("stranic") || norm.includes("site"))) {
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "website_input" }), session_id]
+    );
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      "Unesi URL svoje web stranice (npr. www.mojafirma.hr):",
+      { chips: [] }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // SPECIFIC UPLOAD HANDLERS (must be BEFORE general upload handler!)
+  // =========================
+
+  // Upload stil reference - MUST CHECK FIRST
+  if (norm.includes("upload stil") || norm === "🎨 stil reference" ||
+      (step === "upload_reference" && norm.includes("stil"))) {
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "upload_style_reference", upload_type: "style_reference" }), session_id]
+    );
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `🎨 **Stil reference**\n\nUploadaj slike koje definiraju vizualni stil:\n• Mood i atmosfera\n• Boje i tonovi\n• Kompozicija\n\n💡 Savjet: Koristi slike s Instagram profila koji ti se sviđa.\n\n📎 Povuci sliku ovdje ili koristi gumb ispod:`,
+      {
+        chips: [
+          { type: "file_upload", label: "📤 Odaberi sliku", accept: "image/*", uploadType: "style_reference" },
+          { type: "suggestion", label: "⬅️ Natrag", value: "uploaj slike" },
+          { type: "suggestion", label: "Preskoči", value: "preskoči reference" }
+        ]
+      }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Upload proizvod reference - MUST CHECK FIRST
+  if (norm.includes("upload proizvod") || norm === "📦 proizvodi" ||
+      (step === "upload_reference" && norm.includes("proizvod"))) {
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "upload_product_reference", upload_type: "product_reference" }), session_id]
+    );
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `📦 **Proizvodi**\n\nUploadaj slike proizvoda koje želiš da AI uključi u generirani sadržaj.\n\n💡 Savjet: Koristi čiste slike na bijeloj pozadini za najbolje rezultate.\n\n📎 Povuci sliku ovdje ili koristi gumb ispod:`,
+      {
+        chips: [
+          { type: "file_upload", label: "📤 Odaberi sliku", accept: "image/*", uploadType: "product_reference" },
+          { type: "suggestion", label: "⬅️ Natrag", value: "uploaj slike" },
+          { type: "suggestion", label: "Preskoči", value: "preskoči reference" }
+        ]
+      }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Upload lik reference - MUST CHECK FIRST
+  if (norm.includes("upload lik") || norm === "👤 likovi" ||
+      (step === "upload_reference" && (norm.includes("lik") || norm.includes("character")))) {
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "upload_character_reference", upload_type: "character_reference" }), session_id]
+    );
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `👤 **Likovi / Osobe**\n\nUploadaj slike osoba ili maskota koje želiš konzistentno prikazivati.\n\n💡 Savjet: Uploadaj više slika iste osobe iz različitih kutova.\n\n📎 Povuci sliku ovdje ili koristi gumb ispod:`,
+      {
+        chips: [
+          { type: "file_upload", label: "📤 Odaberi sliku", accept: "image/*", uploadType: "character_reference" },
+          { type: "suggestion", label: "⬅️ Natrag", value: "uploaj slike" },
+          { type: "suggestion", label: "Preskoči", value: "preskoči reference" }
+        ]
+      }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Preskoči reference - MUST CHECK BEFORE general upload handler
+  if (norm.includes("preskoči") || norm.includes("skip") || 
+      (step === "upload_reference" && (norm.includes("dalje") || norm.includes("nastavi")))) {
+    const requirements = await checkProgress(PROJECT_ID, state);
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "onboarding", references_skipped: true }), session_id]
+    );
+
+    let message = `Ok, možeš uploadati reference kasnije.\n\n${progressText}\n`;
+    if (requirements.canGenerate) {
+      message += "🎉 Sve je spremno! Možeš pokrenuti generiranje.";
+    } else if (!requirements.progress.has_goal) {
+      message += "Reci mi cilj tvog profila:";
+    } else if (!requirements.progress.has_profile_type) {
+      message += "Koji tip profila te opisuje?";
+    } else if (!requirements.progress.has_focus) {
+      message += "Na što se fokusiramo?";
+    }
+
+    const a = await pushMessage(session_id, "assistant", message, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // Prikaži reference za brisanje
+  if (norm.includes("prikaži reference") || norm.includes("obriši reference")) {
+    const assets = await q<any>(
+      `SELECT id, url, label, created_at FROM assets 
+       WHERE project_id = $1 AND label IN ('style_reference', 'product_reference', 'character_reference')
+       ORDER BY label, created_at DESC`,
+      [PROJECT_ID]
+    );
+
+    if (assets.length === 0) {
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Nemaš uploadanih referenci.",
+        { chips: [{ type: "suggestion", label: "Uploaj slike", value: "uploaj slike" }] }
+      );
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    const chips: any[] = assets.map((a: any) => ({
+      type: "asset_delete",
+      label: `🗑️ ${a.label.replace('_reference', '')}: ${a.id.slice(-6)}`,
+      assetId: a.id
+    }));
+
+    chips.push({ type: "suggestion", label: "⬅️ Natrag", value: "uploaj slike" });
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      `🗑️ **Obriši reference**\n\nKlikni na referencu koju želiš obrisati:\n\n${assets.map((a: any) => `• ${a.label.replace('_reference', '')}: ...${a.id.slice(-8)}`).join('\n')}`,
+      { chips }
+    );
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // GENERAL UPLOAD HANDLER (must be AFTER specific handlers!)
+  // =========================
+  // Uploaj slike / Reference - GENERAL MENU
+  if (norm.includes("uploaj") || (norm.includes("upload") && !norm.includes("stil") && !norm.includes("proizvod") && !norm.includes("lik"))) {
+    // Dohvati trenutne reference
+    const refs = await q<any>(
+      `SELECT label, COUNT(*) as count FROM assets 
+       WHERE project_id = $1 AND label IN ('style_reference', 'product_reference', 'character_reference')
+       GROUP BY label`,
+      [PROJECT_ID]
+    );
+
+    const refCounts: Record<string, number> = {};
+    refs.forEach((r: any) => { refCounts[r.label] = parseInt(r.count); });
+
+    const styleCount = refCounts['style_reference'] || 0;
+    const productCount = refCounts['product_reference'] || 0;
+    const characterCount = refCounts['character_reference'] || 0;
+    const totalCount = styleCount + productCount + characterCount;
+
+    let message = `📸 **Reference za generiranje**\n\n`;
+    message += `Reference pomažu AI-u da bolje razumije tvoj stil i proizvode.\n\n`;
+    message += `Trenutno imaš:\n`;
+    message += `• Stil reference: ${styleCount}/5\n`;
+    message += `• Proizvodi: ${productCount}/5\n`;
+    message += `• Likovi: ${characterCount}/5\n`;
+    message += `\n📊 Ukupno: ${totalCount}/8 (koristi se max 8 pri generiranju)\n\n`;
+    message += `Odaberi što želiš uploadati:`;
+
+    const chips: any[] = [
+      { type: "suggestion", label: "🎨 Stil reference", value: "upload stil" },
+      { type: "suggestion", label: "📦 Proizvodi", value: "upload proizvod" },
+      { type: "suggestion", label: "👤 Likovi", value: "upload lik" }
+    ];
+
+    if (totalCount > 0) {
+      chips.push({ type: "suggestion", label: "🗑️ Obriši reference", value: "prikaži reference za brisanje" });
+    }
+
+    chips.push({ type: "suggestion", label: "Preskoči", value: "preskoči reference" });
+
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ ...state, step: "upload_reference" }), session_id]
+    );
+
+    const a = await pushMessage(session_id, "assistant", message, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // STEP 0: INIT
+  // =========================
+  if (step === "init") {
+    // SPECIAL: Handle "Instagram spojen!" from OAuth callback
+    if (norm.includes("spojen") || norm.includes("connected") || norm.includes("uspješno")) {
+      // Always move to onboarding after IG connection
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "onboarding", ig_connected: true }), session_id]
+      );
+
+      const requirements = await checkProgress(PROJECT_ID, { ...state, ig_connected: true });
+      const chips = getNextOnboardingChips(requirements.progress, true);
+      const progressText = buildProgressIndicator(requirements.progress);
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        `✅ Super! Instagram je uspješno povezan! 🎉\n\nPokrećem analizu tvojih objava u pozadini...\n\n${progressText}\nU međuvremenu, reci mi cilj tvog profila za idući mjesec:`,
+        { chips }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Brzi pregled
+    if (norm.includes("brzi") || norm.includes("pregled") || norm.includes("analiz")) {
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "scrape_input" }), session_id]
+      );
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Unesi Instagram username ili URL profila.\n\nPrimjeri: @mojbrand, instagram.com/mojbrand",
+        { chips: [] }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Spoji Instagram
+    if (norm.includes("spoji") || norm.includes("connect")) {
+      if (ig_connected) {
+        await q(
+          `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+          [JSON.stringify({ ...state, step: "onboarding" }), session_id]
+        );
+
+        const requirements = await checkProgress(PROJECT_ID, state);
+        const chips = getNextOnboardingChips(requirements.progress, true);
+        const progressText = buildProgressIndicator(requirements.progress);
+
+        const a = await pushMessage(
+          session_id,
+          "assistant",
+          `✅ Instagram je već povezan! Analiza je u tijeku.\n\n${progressText}\nReci mi cilj tvog profila za idući mjesec:`,
+          { chips }
+        );
+
+        return NextResponse.json({ new_messages: [a] });
+      }
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Otvori Settings i klikni \"Connect Instagram\".",
+        { chips: [{ type: "navigation", label: "Otvori Settings", href: "/settings" }] }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Nastavi bez Instagrama
+    if (norm.includes("nastavi") || norm.includes("bez") || norm.includes("skip")) {
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "no_instagram_options", no_instagram: true }), session_id]
+      );
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Ok! Bez Instagrama možeš:\n\n1. **Brzi pregled** - analiziraj bilo koji javni profil\n2. **Web stranica** - unesi URL stranice za analizu firme\n3. **Uploaj slike** - ručni upload referentnih slika",
+        {
+          chips: [
+            { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
+            { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" },
+            { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" }
+          ]
+        }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Check if user typed an Instagram username directly
+    const username = extractInstagramUsername(text);
+    if (username) {
+      return handleScraping(session_id, state, username, ig_connected);
+    }
+
+    // Default
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      "Odaberi kako želiš započeti:",
+      {
+        chips: [
+          { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
+          { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+          { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
+        ]
+      }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // STEP: NO INSTAGRAM OPTIONS
+  // =========================
+  if (step === "no_instagram_options") {
+    if (norm.includes("brzi") || norm.includes("pregled")) {
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "scrape_input" }), session_id]
+      );
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Unesi Instagram username ili URL profila za analizu:",
+        { chips: [] }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    const a = await pushMessage(
+      session_id,
+      "assistant",
+      "Odaberi opciju:",
+      {
+        chips: [
+          { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
+          { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" },
+          { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" }
+        ]
+      }
+    );
+
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // STEP: SCRAPE INPUT
+  // =========================
+  if (step === "scrape_input") {
+    const username = extractInstagramUsername(text);
+    if (!username) {
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Nisam prepoznao username. Format: @username ili instagram.com/username",
+        { chips: [] }
+      );
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    return handleScraping(session_id, state, username, ig_connected);
+  }
+
+  // =========================
+  // STEP: WEBSITE INPUT
+  // =========================
+  if (step === "website_input") {
+    const url = extractWebsiteUrl(text);
+    if (!url) {
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        "Nisam prepoznao URL. Format: www.example.com ili https://example.com",
+        { chips: [] }
+      );
+      return NextResponse.json({ new_messages: [a] });
+    }
+
+    // Pokreni web scraping
+    log("chat:website", "scraping_start", { url });
+    
+    const scrapedData = await scrapeWebsite(url);
+    
+    await q(
+      `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+      [JSON.stringify({ 
+        ...state, 
+        website_url: url, 
+        website_data: scrapedData,
+        step: "onboarding" 
+      }), session_id]
+    );
+
+    log("chat:website", "scraping_complete", { url, success: scrapedData.success });
+
+    const requirements = await checkProgress(PROJECT_ID, { ...state, website_url: url });
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    let responseText = "";
+    if (scrapedData.success && scrapedData.data) {
+      const d = scrapedData.data;
+      responseText = `✅ **Web stranica analizirana!**\n\n`;
+      responseText += `🌐 ${url}\n\n`;
+      if (d.title) responseText += `📌 ${d.title}\n`;
+      if (d.description) responseText += `📝 ${d.description}\n`;
+      if (d.products && d.products.length > 0) {
+        responseText += `\n🏷️ Pronađeni proizvodi/kategorije:\n`;
+        d.products.slice(0, 5).forEach((p: string) => {
+          responseText += `• ${p}\n`;
+        });
+      }
+      if (d.colors && d.colors.length > 0) {
+        responseText += `\n🎨 Dominantne boje: ${d.colors.join(", ")}\n`;
+      }
+      responseText += `\n${progressText}\nReci mi cilj tvog profila za idući mjesec:`;
+    } else {
+      responseText = `✅ Web stranica zabilježena: ${url}\n\n`;
+      responseText += `⚠️ Nisam mogao dohvatiti detalje sa stranice, ali možemo nastaviti.\n\n`;
+      responseText += `${progressText}\nReci mi cilj tvog profila za idući mjesec:`;
+    }
+
+    const a = await pushMessage(session_id, "assistant", responseText, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // STEP: SCRAPE COMPLETE
+  // =========================
+  if (step === "scrape_complete") {
+    if (norm.includes("da") || norm.includes("nastavi")) {
+      await q(
+        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+        [JSON.stringify({ ...state, step: "onboarding" }), session_id]
+      );
+
+      const requirements = await checkProgress(PROJECT_ID, state);
+      const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+      const progressText = buildProgressIndicator(requirements.progress);
+
+      const a = await pushMessage(
+        session_id,
+        "assistant",
+        `Odlično!\n\n${progressText}\nReci mi cilj tvog profila za idući mjesec:`,
+        { chips }
+      );
+
+      return NextResponse.json({ new_messages: [a] });
+    }
+  }
+
+  // =========================
+  // STEP: ONBOARDING
+  // =========================
+  if (step === "onboarding" || step === "ready_to_generate" || step === "pre_generate") {
+    const requirements = await checkProgress(PROJECT_ID, state);
+    const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+    const progressText = buildProgressIndicator(requirements.progress);
+
+    let message = `${progressText}\n`;
+    if (!requirements.progress.has_goal) {
+      message += "Reci mi cilj tvog profila za idući mjesec:";
+    } else if (!requirements.progress.has_profile_type) {
+      message += "Koji tip profila te najbolje opisuje?";
+    } else if (!requirements.progress.has_focus) {
+      message += "Na što se fokusiramo u idućih 30 dana?";
+    } else if (requirements.canGenerate) {
+      message += "Sve je spremno! Pokreni generiranje.";
+    } else {
+      message += "Nastavi s onboardingom.";
+    }
+
+    const a = await pushMessage(session_id, "assistant", message, { chips });
+    return NextResponse.json({ new_messages: [a] });
+  }
+
+  // =========================
+  // DEFAULT
+  // =========================
+  const requirements = await checkProgress(PROJECT_ID, state);
+  const chips = getNextOnboardingChips(requirements.progress, ig_connected);
+
+  const a = await pushMessage(
+    session_id,
+    "assistant",
+    "Mogu:\n• \"generiraj plan\"\n• \"prikaži proizvode\"\n• \"nastavi\" s onboardingom",
+    { chips }
+  );
+
+  return NextResponse.json({ new_messages: [a] });
+}
+
+// ============================================================
+// Helper: Handle scraping flow
+// ============================================================
+async function handleScraping(
+  session_id: string,
+  state: any,
+  username: string,
+  ig_connected: boolean
+) {
+  const scrapeResult = await performScraping(username);
+
+  let responseText: string;
+  let chips: any[];
+
+  if (scrapeResult.success && scrapeResult.data) {
+    const d = scrapeResult.data;
+
+    if (scrapeResult.source === "instagram" && !scrapeResult.needsMoreInfo) {
+      responseText = `📊 **Profil @${username}**\n\n`;
+      if (d.full_name) responseText += `👤 ${d.full_name}\n`;
+      if (d.followers) responseText += `👥 Pratitelji: ${d.followers}\n`;
+      if (d.posts_count) responseText += `📸 Objava: ${d.posts_count}\n`;
+      if (d.bio) responseText += `\n📝 ${d.bio}\n`;
+      responseText += `\nŽeliš li nastaviti s ovim profilom?`;
+
+      chips = [
+        { type: "suggestion", label: "Da, nastavi", value: "nastavi" },
+        { type: "suggestion", label: "Unesi web stranicu za više info", value: "web stranica" }
+      ];
+
+      if (!ig_connected) {
+        chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+      }
+    } else {
+      responseText = `📊 **Analiza @${username}**\n\n`;
+      if (d.estimated_niche) responseText += `🎯 Procijenjeni niche: ${d.estimated_niche}\n`;
+      if (d.estimated_style) responseText += `🎨 Procijenjeni stil: ${d.estimated_style}\n`;
+      if (d.followers) responseText += `👥 Pratitelji: ${d.followers}\n`;
+      responseText += `\n⚠️ Nisam pronašao sve informacije. Za bolje rezultate:`;
+
+      chips = [
+        { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" },
+        { type: "suggestion", label: "Nastavi bez dodatnih info", value: "nastavi" }
+      ];
+
+      if (!ig_connected) {
+        chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+      }
+
+      chips.push({ type: "suggestion", label: "Pokušaj drugi profil", value: "brzi pregled" });
+    }
+  } else {
+    responseText = `Nisam uspio dohvatiti podatke za @${username}.\n\nProfil je možda privatan ili ne postoji.`;
+    chips = [
+      { type: "suggestion", label: "Pokušaj drugi profil", value: "brzi pregled" },
+      { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" }
+    ];
+
+    if (!ig_connected) {
+      chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+    }
+
+    chips.push({ type: "suggestion", label: "Nastavi bez analize", value: "nastavi bez" });
+  }
+
+  await q(
+    `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
+    [JSON.stringify({ ...state, step: "scrape_complete", username, scrape_result: scrapeResult }), session_id]
+  );
+
+  const a = await pushMessage(session_id, "assistant", responseText, { chips });
+  return NextResponse.json({ new_messages: [a] });
 }

@@ -1,4 +1,5 @@
 import "./globals.css";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="hr">
@@ -15,6 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex items-center gap-3 text-sm">
               <a className="text-zinc-600 hover:text-zinc-900" href="/chat">Chat</a>
               <a className="text-zinc-600 hover:text-zinc-900" href="/calendar">Calendar</a>
+              <a className="text-zinc-600 hover:text-zinc-900" href="/profile">Profile</a>
               <a className="text-zinc-600 hover:text-zinc-900" href="/settings">Settings</a>
             </div>
           </div>
