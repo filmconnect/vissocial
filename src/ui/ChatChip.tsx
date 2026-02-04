@@ -3,10 +3,10 @@
 // ============================================================
 // Interactive chip component for chat interface.
 // Supports: suggestions, onboarding options, product confirmations, navigation
-// 
+//
 // FIX: Icons now correctly show:
-//   - Before confirm: ➕ Plus icon (not ✅)
-//   - After confirm: ✅ Checkmark icon
+//   - Before confirm: ✓ Plus icon (not ✓)
+//   - After confirm: ✓ Checkmark icon
 // ============================================================
 
 "use client";
@@ -146,13 +146,29 @@ function normalizeChip(chip: ChatChipType | string): ChatChipType {
 }
 
 // ============================================================
+// Helper: Create chip object (for API routes)
+// ============================================================
+
+export function chip(
+  label: string,
+  type: ChatChipType["type"] = "suggestion",
+  options: Partial<Omit<ChatChipType, "type" | "label">> = {}
+): ChatChipType {
+  return {
+    type,
+    label,
+    ...options
+  };
+}
+
+// ============================================================
 // Main Component
 // ============================================================
 
 export function ChatChip({ chip: rawChip, onAction, disabled = false }: ChatChipProps) {
   const router = useRouter();
   const chip = normalizeChip(rawChip);
-  
+
   const [state, setState] = useState<ChipState>("default");
 
   const isLoading = state === "loading";
@@ -215,10 +231,10 @@ export function ChatChip({ chip: rawChip, onAction, disabled = false }: ChatChip
     // Product confirmation
     if (chip.type === "product_confirm" && chip.productId) {
       setState("loading");
-      
+
       try {
-        const endpoint = chip.action === "reject" 
-          ? "/api/products/reject" 
+        const endpoint = chip.action === "reject"
+          ? "/api/products/reject"
           : "/api/products/confirm";
 
         const res = await fetch(endpoint, {
@@ -261,10 +277,10 @@ export function ChatChip({ chip: rawChip, onAction, disabled = false }: ChatChip
   // Styling
   // ============================================================
   const baseClasses = `
-    inline-flex items-center gap-2 
-    px-3 py-1.5 
-    text-sm font-medium 
-    rounded-full 
+    inline-flex items-center gap-2
+    px-3 py-1.5
+    text-sm font-medium
+    rounded-full
     transition-all duration-200
     cursor-pointer
     select-none
@@ -336,10 +352,10 @@ export function ChipGroup({ chips, onAction, disabled, className = "" }: ChipGro
 
   return (
     <div className={`flex flex-wrap gap-2 ${className}`}>
-      {chips.map((chip, index) => (
+      {chips.map((c, index) => (
         <ChatChip
-          key={typeof chip === "string" ? chip : chip.label + index}
-          chip={chip}
+          key={typeof c === "string" ? c : c.label + index}
+          chip={c}
           onAction={onAction}
           disabled={disabled}
         />
