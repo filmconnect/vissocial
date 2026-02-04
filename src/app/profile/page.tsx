@@ -60,8 +60,9 @@ interface Product {
   id: string;
   name: string;
   category: string;
-  frequency: number;
-  visual_features: string[];
+  confidence?: number;
+  frequency?: number;
+  visual_features?: string[];
   locked: boolean;
 }
 
@@ -173,7 +174,10 @@ export default function ProfilePage() {
       const result = await res.json();
       setData(result);
       setEditedProfile(result.brand_profile);
-      setEditedProducts(result.confirmed_products || []);
+		setEditedProducts((result.confirmed_products || []).map((p: Product) => ({
+		  ...p,
+		  frequency: p.frequency ?? 0
+		})));
     } catch (error) {
       console.error("Failed to fetch profile:", error);
     } finally {

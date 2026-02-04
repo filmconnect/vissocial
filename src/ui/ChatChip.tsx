@@ -146,20 +146,43 @@ function normalizeChip(chip: ChatChipType | string): ChatChipType {
 }
 
 // ============================================================
-// Helper: Create chip object (for API routes)
+// Helper: Create chip objects (for API routes)
 // ============================================================
 
-export function chip(
-  label: string,
-  type: ChatChipType["type"] = "suggestion",
-  options: Partial<Omit<ChatChipType, "type" | "label">> = {}
-): ChatChipType {
-  return {
-    type,
+export const chip = {
+  suggestion: (label: string, value?: string): ChatChipType => ({
+    type: "suggestion",
     label,
-    ...options
-  };
-}
+    value: value ?? label
+  }),
+
+  onboarding: (label: string, step: string, value?: string): ChatChipType => ({
+    type: "onboarding_option",
+    label,
+    step,
+    value: value ?? label
+  }),
+
+  navigation: (label: string, href: string): ChatChipType => ({
+    type: "navigation",
+    label,
+    href
+  }),
+
+  productConfirm: (label: string, productId: string): ChatChipType => ({
+    type: "product_confirm",
+    label,
+    productId,
+    action: "confirm"
+  }),
+
+  productReject: (label: string, productId: string): ChatChipType => ({
+    type: "product_confirm",
+    label,
+    productId,
+    action: "reject"
+  })
+};
 
 // ============================================================
 // Main Component
@@ -352,14 +375,19 @@ export function ChipGroup({ chips, onAction, disabled, className = "" }: ChipGro
 
   return (
     <div className={`flex flex-wrap gap-2 ${className}`}>
-      {chips.map((c, index) => (
-        <ChatChip
-          key={typeof c === "string" ? c : c.label + index}
-          chip={c}
-          onAction={onAction}
-          disabled={disabled}
-        />
-      ))}
+      {chips.map((c, index) => {
+        const normalized = typeof c === "string" 
+          ? { type: "suggestion" as const, label: c, value: c }
+          : c;
+        return (
+          <ChatChip
+            key={typeof c === "string" ? c : c.label + index}
+            chip={normalized}
+            onAction={onAction}
+            disabled={disabled}
+          />
+        );
+      })}
     </div>
   );
 }
