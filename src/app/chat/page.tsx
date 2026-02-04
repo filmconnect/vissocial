@@ -6,11 +6,12 @@
 // 2. Notification polling s mark-as-read
 // 3. Instagram OAuth callback handling
 // 4. Step 0 initial flow (prije OAuth)
+// 5. SUSPENSE BOUNDARY for useSearchParams
 // ============================================================
 
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card } from "@/ui/Card";
 import { Badge } from "@/ui/Badge";
@@ -94,15 +95,16 @@ function ChipButton({
     // Asset delete chips
     if (type === "asset_delete" && assetId) {
       if (!confirm("Obrisati ovu referencu?")) return;
+      
       setLoading(true);
       try {
-        const res = await fetch(`/api/assets/${assetId}`, { method: "DELETE" });
+        const res = await fetch("/api/assets/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ asset_id: assetId })
+        });
         if (res.ok) {
           setConfirmed(true);
-          // Refresh by sending action
-          if (onAction) {
-            setTimeout(() => onAction("uploaj slike"), 500);
-          }
         }
       } catch (e) {
         console.error("Delete failed:", e);
@@ -111,13 +113,11 @@ function ChipButton({
       return;
     }
 
-    // Product confirmation
+    // Product confirm/reject
     if (type === "product_confirm" && productId) {
       setLoading(true);
       try {
-        const endpoint = action === "reject"
-          ? "/api/products/reject"
-          : "/api/products/confirm";
+        const endpoint = action === "reject" ? "/api/products/reject" : "/api/products/confirm";
         const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -133,13 +133,13 @@ function ChipButton({
       return;
     }
 
-    // Default action (suggestions, onboarding)
+    // Default: send as message
     if (onAction) {
       onAction(value);
     }
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !uploadType) return;
     
@@ -188,7 +188,6 @@ function ChipButton({
         </svg>
       );
     } else {
-      // Plus icon BEFORE confirm
       icon = (
         <svg className="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -284,10 +283,10 @@ function Bubble({
 }
 
 // ============================================================
-// Main Chat Page
+// Main Chat Page Content (uses useSearchParams)
 // ============================================================
 
-export default function ChatPage() {
+function ChatPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -299,9 +298,9 @@ export default function ChatPage() {
 
   const endRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const initRef = useRef(false); // Prevent double initialization in StrictMode
-  const processedNotifRef = useRef<Set<string>>(new Set()); // Track processed notifications
-  const sentMessagesRef = useRef<Set<string>>(new Set()); // Track sent messages to prevent duplicates
+  const initRef = useRef(false);
+  const processedNotifRef = useRef<Set<string>>(new Set());
+  const sentMessagesRef = useRef<Set<string>>(new Set());
 
   // ============================================================
   // Scroll to bottom on new messages
@@ -326,7 +325,6 @@ export default function ChatPage() {
     }
 
     return () => {
-      // Cleanup polling on unmount
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
       }
@@ -341,13 +339,9 @@ export default function ChatPage() {
 
     if (igParam === "connected" && sessionId && !igConnected) {
       setIgConnected(true);
-
-      // Remove query param from URL
       router.replace("/chat", { scroll: false });
 
-      // RELOAD session to get updated state (callback already set step to "onboarding")
       loadSession(sessionId).then(() => {
-        // Send automatic message AFTER reload (with deduplication)
         const msgKey = `ig_connected_${sessionId}`;
         if (!sentMessagesRef.current.has(msgKey)) {
           sentMessagesRef.current.add(msgKey);
@@ -363,17 +357,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (!sessionId) return;
 
-    // Clear any existing polling
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
     }
 
-    // Poll every 5 seconds
     pollingRef.current = setInterval(() => {
       pollNotifications();
     }, 5000);
 
-    // Initial poll
     pollNotifications();
 
     return () => {
@@ -414,14 +405,13 @@ export default function ChatPage() {
       }
     } catch (err) {
       console.error("Failed to load session:", err);
-      // If session doesn't exist, create new one
       localStorage.removeItem("chat_session_id");
       createSession();
     }
   }
 
   // ============================================================
-  // Normalize messages (ensure consistent format)
+  // Normalize messages
   // ============================================================
   function normalizeMessages(messages: any[]): Msg[] {
     return messages.map(m => ({
@@ -444,14 +434,12 @@ export default function ChatPage() {
 
       if (data.notifications && data.notifications.length > 0) {
         for (const notif of data.notifications) {
-          // Skip already processed notifications
           if (processedNotifRef.current.has(notif.id)) {
             continue;
           }
 
           processedNotifRef.current.add(notif.id);
 
-          // Convert notification to message
           const notifMsg: Msg = {
             id: notif.id,
             role: "assistant",
@@ -459,21 +447,17 @@ export default function ChatPage() {
             chips: notif.chips || []
           };
 
-          // Add to messages (with deduplication)
           setMsgs(prev => {
-            // Check if message already exists
             if (prev.some(m => m.id === notifMsg.id)) {
               return prev;
             }
             return [...prev, notifMsg];
           });
 
-          // Mark notification as read
           await markNotificationRead(notif.id);
         }
       }
     } catch (err) {
-      // Silent fail for polling
       console.debug("Notification poll failed:", err);
     }
   }
@@ -494,15 +478,11 @@ export default function ChatPage() {
   }
 
   // ============================================================
-  // Send message (with deduplication)
+  // Send message
   // ============================================================
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !sessionId || busy) return;
 
-    // Create a unique key for this message
-    const msgKey = `${sessionId}_${text}_${Date.now()}`;
-
-    // Prevent rapid duplicate sends (within 2 seconds)
     const recentKey = `${sessionId}_${text}`;
     if (sentMessagesRef.current.has(recentKey)) {
       console.debug("Duplicate message blocked:", text);
@@ -510,14 +490,12 @@ export default function ChatPage() {
     }
     sentMessagesRef.current.add(recentKey);
 
-    // Clear the duplicate check after 2 seconds
     setTimeout(() => {
       sentMessagesRef.current.delete(recentKey);
     }, 2000);
 
     setBusy(true);
 
-    // Optimistically add user message
     const userMsg: Msg = {
       id: "temp_" + Date.now(),
       role: "user",
@@ -537,14 +515,10 @@ export default function ChatPage() {
 
       if (data.new_messages) {
         setMsgs(prev => {
-          // Replace temp message with real one + add new messages
           const withoutTemp = prev.filter(m => m.id !== userMsg.id);
           const normalized = normalizeMessages(data.new_messages);
-
-          // Deduplicate by id
           const existingIds = new Set(withoutTemp.map(m => m.id));
           const newMsgs = normalized.filter(m => !existingIds.has(m.id));
-
           return [...withoutTemp, userMsg, ...newMsgs];
         });
       }
@@ -556,14 +530,14 @@ export default function ChatPage() {
   }, [sessionId, busy]);
 
   // ============================================================
-  // Handle chip click (sends as message)
+  // Handle chip click
   // ============================================================
   function handleChipAction(value: string) {
     sendMessage(value);
   }
 
   // ============================================================
-  // Handle file upload from chip
+  // Handle file upload
   // ============================================================
   async function handleFileUpload(file: File, uploadType: string) {
     setBusy(true);
@@ -582,7 +556,6 @@ export default function ChatPage() {
       const data = await res.json();
 
       if (data.success) {
-        // Add success message to chat
         const successMsg: Msg = {
           id: "msg_upload_" + Date.now(),
           role: "assistant",
@@ -594,7 +567,6 @@ export default function ChatPage() {
         };
         setMsgs(prev => [...prev, successMsg]);
       } else {
-        // Show error
         const errorMsg: Msg = {
           id: "msg_upload_error_" + Date.now(),
           role: "assistant",
@@ -628,7 +600,7 @@ export default function ChatPage() {
   }
 
   // ============================================================
-  // Reset session (start new onboarding) - FULL RESET
+  // Reset session
   // ============================================================
   async function resetSession() {
     if (!confirm("Želiš li stvarno započeti novu sesiju?\n\nOvo će:\n• Odspojiti Instagram\n• Obrisati sve proizvode\n• Započeti onboarding ispočetka")) {
@@ -636,7 +608,6 @@ export default function ChatPage() {
     }
 
     try {
-      // Call reset API
       const res = await fetch("/api/chat/reset", { method: "POST" });
       
       if (!res.ok) {
@@ -645,20 +616,16 @@ export default function ChatPage() {
 
       const data = await res.json();
 
-      // Clear local storage
       localStorage.removeItem("chat_session_id");
       
-      // Clear refs
       processedNotifRef.current.clear();
       sentMessagesRef.current.clear();
       initRef.current = false;
       
-      // Update state with new session
       setSessionId(data.session_id);
       setMsgs(data.messages || []);
       setIgConnected(false);
 
-      // Save new session to localStorage
       localStorage.setItem("chat_session_id", data.session_id);
 
       console.log("Session reset complete:", data.reset);
@@ -726,5 +693,17 @@ export default function ChatPage() {
         </div>
       </Card>
     </main>
+  );
+}
+
+// ============================================================
+// Default Export with Suspense Boundary
+// ============================================================
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="p-4 text-zinc-500">Loading chat...</div>}>
+      <ChatPageContent />
+    </Suspense>
   );
 }
