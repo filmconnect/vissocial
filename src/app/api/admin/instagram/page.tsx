@@ -1,3 +1,6 @@
+
+export const dynamic = 'force-dynamic';
+
 export default function AdminInstagramPage() {
   async function test() {
     const res = await fetch(
