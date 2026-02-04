@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
-import { chip, ChatChip } from "@/ui/ChatChip";
+import { chip } from '@/ui/ChatChip';
+import type { ChatChip } from '@/types/vision';
 
 const PROJECT_ID = "proj_local";
 
