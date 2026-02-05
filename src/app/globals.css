@@ -1,3 +1,367 @@
+/* ============================================================
+   VISSOCIAL DESIGN SYSTEM - Global Styles
+   ============================================================
+   Merged: existing Tailwind directives + new design system v2
+   Import order: design-tokens → tailwind → custom layers
+   ============================================================ */
+
+/* Import centralized design tokens (CSS custom properties) */
+@import "../../styles/design-tokens.css";
+
+/* Tailwind directives (from existing globals.css) */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============================================================
+   CSS CUSTOM PROPERTIES (Overrides / Additions)
+   ============================================================
+   These extend design-tokens.css with Tailwind-specific shortcuts.
+   design-tokens.css is the single source of truth for colors.
+   These are convenience aliases used in @apply directives below.
+   ============================================================ */
+:root {
+  /* Shadows (shorthand aliases for Tailwind @apply) */
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-button: 0 2px 4px rgba(0, 0, 0, 0.1);
+  --shadow-chat: 0 4px 20px -2px rgba(0, 0, 0, 0.08);
+
+  /* Border Radius */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease-in-out;
+  --transition-normal: 200ms ease-in-out;
+  --transition-slow: 300ms ease-in-out;
+}
+
+/* ============================================================
+   BASE LAYER
+   ============================================================ */
+@layer base {
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Default body styles */
+  body {
+    @apply bg-lavender-100 text-gray-900 font-sans;
+    min-height: 100vh;
+  }
+
+  /* Focus visible for accessibility */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary-500 ring-offset-2;
+  }
+
+  /* Remove default button styles */
+  button {
+    @apply font-sans;
+  }
+
+  /* Custom selection color */
+  ::selection {
+    @apply bg-primary-200 text-gray-900;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400;
+  }
+}
+
+/* ============================================================
+   COMPONENT LAYER
+   ============================================================ */
+@layer components {
+  /* ----------------------------------------
+     BUTTONS
+     ---------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center font-medium 
+           transition-all duration-200 
+           focus:outline-none focus:ring-2 focus:ring-offset-2 
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary-500 text-gray-900 
+           hover:bg-primary-600 focus:ring-primary-500
+           shadow-button hover:shadow-md;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-gray-700 border border-gray-200
+           hover:bg-gray-50 hover:border-gray-300
+           focus:ring-primary-500;
+  }
+
+  .btn-ghost {
+    @apply btn text-gray-600 hover:text-gray-900 hover:bg-gray-100;
+  }
+
+  .btn-link {
+    @apply text-violet-600 hover:text-violet-700 
+           hover:underline transition-colors;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm rounded-lg;
+  }
+
+  .btn-md {
+    @apply px-4 py-2 text-sm rounded-xl;
+  }
+
+  .btn-lg {
+    @apply px-6 py-3 text-base rounded-xl;
+  }
+
+  /* ----------------------------------------
+     CARDS
+     ---------------------------------------- */
+  .card {
+    @apply bg-white rounded-2xl shadow-card;
+  }
+
+  .card-hover {
+    @apply card transition-shadow duration-200 hover:shadow-card-hover;
+  }
+
+  .card-sm {
+    @apply card p-4;
+  }
+
+  .card-md {
+    @apply card p-6;
+  }
+
+  .card-lg {
+    @apply card p-8;
+  }
+
+  /* ----------------------------------------
+     CHIPS
+     ---------------------------------------- */
+  .chip {
+    @apply inline-flex items-center gap-2 
+           px-4 py-2 text-sm font-medium 
+           rounded-full border transition-all duration-200 
+           cursor-pointer select-none;
+  }
+
+  .chip-default {
+    @apply chip bg-white text-gray-700 border-gray-200
+           hover:border-gray-300 hover:shadow-sm;
+  }
+
+  .chip-selected {
+    @apply chip bg-primary-100 text-gray-900 border-primary-500;
+  }
+
+  .chip-recommended {
+    @apply chip bg-primary-100 text-gray-900 border-primary-500;
+  }
+
+  /* ----------------------------------------
+     INPUTS
+     ---------------------------------------- */
+  .input {
+    @apply w-full px-4 py-3 text-gray-900 bg-white 
+           border border-gray-200 rounded-xl 
+           transition-all duration-200 
+           placeholder:text-gray-400
+           focus:outline-none focus:ring-2 focus:ring-primary-500 
+           focus:border-transparent;
+  }
+
+  .input-error {
+    @apply input border-error-500 focus:ring-error-500;
+  }
+
+  /* ----------------------------------------
+     CHAT ELEMENTS
+     ---------------------------------------- */
+  .chat-bubble {
+    @apply rounded-2xl px-5 py-4;
+  }
+
+  .chat-bubble-assistant {
+    @apply chat-bubble bg-white shadow-chat;
+  }
+
+  .chat-bubble-user {
+    @apply chat-bubble bg-gray-100 ml-auto;
+  }
+
+  /* ----------------------------------------
+     LABELS & BADGES
+     ---------------------------------------- */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 
+           rounded-full text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply badge bg-primary-100 text-primary-700;
+  }
+
+  .badge-success {
+    @apply badge bg-success-100 text-success-600;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning-100 text-warning-600;
+  }
+
+  .badge-error {
+    @apply badge bg-error-100 text-error-600;
+  }
+
+  .badge-neutral {
+    @apply badge bg-gray-100 text-gray-600;
+  }
+
+  /* ----------------------------------------
+     FEATURE ITEMS (for landing page)
+     ---------------------------------------- */
+  .feature-item {
+    @apply flex items-start gap-3 text-gray-600;
+  }
+
+  .feature-icon {
+    @apply w-6 h-6 text-primary-500 flex-shrink-0;
+  }
+
+  /* ----------------------------------------
+     STEP INDICATOR
+     ---------------------------------------- */
+  .step-indicator {
+    @apply inline-flex items-center gap-2 text-sm text-gray-500;
+  }
+
+  /* ----------------------------------------
+     CONTAINER
+     ---------------------------------------- */
+  .container-app {
+    @apply max-w-4xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .container-landing {
+    @apply max-w-6xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+}
+
+/* ============================================================
+   UTILITY LAYER
+   ============================================================ */
+@layer utilities {
+  /* Text utilities */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Gradient backgrounds */
+  .bg-gradient-lavender {
+    background: linear-gradient(180deg, #F8F7FF 0%, #EBE9FE 100%);
+  }
+
+  .bg-gradient-primary {
+    background: linear-gradient(135deg, #FFCA28 0%, #FFB300 100%);
+  }
+
+  /* Glass effect */
+  .glass {
+    @apply bg-white/80 backdrop-blur-sm;
+  }
+
+  /* Hide scrollbar */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Animation delays */
+  .animation-delay-100 {
+    animation-delay: 100ms;
+  }
+
+  .animation-delay-200 {
+    animation-delay: 200ms;
+  }
+
+  .animation-delay-300 {
+    animation-delay: 300ms;
+  }
+
+  .animation-delay-500 {
+    animation-delay: 500ms;
+  }
+
+  /* Shimmer loading effect */
+  .shimmer {
+    @apply animate-shimmer;
+    background: linear-gradient(
+      90deg,
+      #f0f0f0 0%,
+      #e0e0e0 50%,
+      #f0f0f0 100%
+    );
+    background-size: 200% 100%;
+  }
+}
+
+/* ============================================================
+   RESPONSIVE HELPERS
+   ============================================================ */
+
+/* Mobile-first hide/show utilities */
+@media (max-width: 640px) {
+  .mobile-full {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+/* ============================================================
+   PRINT STYLES
+   ============================================================ */
+@media print {
+  body {
+    @apply bg-white text-black;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
