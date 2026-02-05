@@ -1,27 +1,43 @@
+// ============================================================
+// Root Layout
+// ============================================================
+// Vissocial - AI Instagram Content Platform
+// Global layout with Inter font and design system
+// ============================================================
+
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
+
+export const metadata: Metadata = {
+  title: "Vissocial - AI Instagram Content Platform",
+  description:
+    "AI that plans, creates, and improves your Instagram content. Create your next 30 days of posts automatically.",
+  keywords: ["Instagram", "AI", "Content Creation", "Social Media", "Marketing"],
+  authors: [{ name: "Vissocial" }],
+  openGraph: {
+    title: "Vissocial - AI Instagram Content Platform",
+    description:
+      "Create your next 30 days of posts automatically from your existing profile.",
+    type: "website",
+  },
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="hr">
-      <body className="min-h-screen bg-zinc-50 text-zinc-900">
-        <div className="mx-auto max-w-6xl px-4 py-6">
-          <div className="mb-6 flex items-center justify-between">
-            <a href="/" className="flex items-center gap-2">
-              <div className="h-9 w-9 rounded-xl bg-zinc-900" />
-              <div>
-                <div className="text-sm font-semibold">Vissocial</div>
-                <div className="text-xs text-zinc-500">Chat-first MVP</div>
-              </div>
-            </a>
-            <div className="flex items-center gap-3 text-sm">
-              <a className="text-zinc-600 hover:text-zinc-900" href="/chat">Chat</a>
-              <a className="text-zinc-600 hover:text-zinc-900" href="/calendar">Calendar</a>
-              <a className="text-zinc-600 hover:text-zinc-900" href="/profile">Profile</a>
-              <a className="text-zinc-600 hover:text-zinc-900" href="/settings">Settings</a>
-            </div>
-          </div>
-          {children}
-        </div>
+    <html lang="en" className={inter.variable}>
+      <body className={`${inter.className} antialiased`}>
+        {children}
       </body>
     </html>
   );
