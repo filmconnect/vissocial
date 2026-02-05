@@ -25,9 +25,9 @@
 // ============================================================
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ChatBubble, ActionButton, ActionFooter } from "@/components/ChatBubble";
-import { ChatLayout } from "@/components/ChatLayout";
-import type { ChatMessage, ChatChipData } from "@/components/ChatBubble";
+import { ChatBubble, ActionButton, ActionFooter } from "@/ui/ChatBubble";
+import { ChatLayout } from "@/ui/ChatLayout";
+import type { ChatMessage, ChatChipData } from "@/ui/ChatBubble";
 
 // ============================================================
 // Types

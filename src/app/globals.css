@@ -1,31 +1,48 @@
-/* ============================================================
-   VISSOCIAL DESIGN SYSTEM - Global Styles
-   ============================================================
-   Merged: existing Tailwind directives + new design system v2
-   Import order: design-tokens → tailwind → custom layers
-   ============================================================ */
+@import '../styles/design-tokens.css';
 
-/* Import centralized design tokens (CSS custom properties) */
-@import "../../styles/design-tokens.css";
-
-/* Tailwind directives (from existing globals.css) */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ============================================================
-   CSS CUSTOM PROPERTIES (Overrides / Additions)
-   ============================================================
-   These extend design-tokens.css with Tailwind-specific shortcuts.
-   design-tokens.css is the single source of truth for colors.
-   These are convenience aliases used in @apply directives below.
+   VISSOCIAL DESIGN SYSTEM - Global Styles
+   ============================================================ */
+
+/* ============================================================
+   CSS CUSTOM PROPERTIES (Variables)
    ============================================================ */
 :root {
-  /* Shadows (shorthand aliases for Tailwind @apply) */
+  /* Primary Colors */
+  --color-primary-50: #FFFDE7;
+  --color-primary-100: #FFF8E1;
+  --color-primary-200: #FFECB3;
+  --color-primary-300: #FFE082;
+  --color-primary-400: #FFD54F;
+  --color-primary-500: #FFCA28;
+  --color-primary-600: #FFB300;
+  --color-primary-700: #FFA000;
+
+  /* Background Colors */
+  --color-bg-primary: #F8F7FF;
+  --color-bg-secondary: #F4F3FF;
+  --color-bg-tertiary: #EBE9FE;
+  --color-bg-card: #FFFFFF;
+
+  /* Text Colors */
+  --color-text-primary: #1F2937;
+  --color-text-secondary: #6B7280;
+  --color-text-tertiary: #9CA3AF;
+  --color-text-inverse: #FFFFFF;
+  --color-text-link: #7C3AED;
+
+  /* Border Colors */
+  --color-border-light: #E5E7EB;
+  --color-border-medium: #D1D5DB;
+
+  /* Shadows */
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.12);
   --shadow-button: 0 2px 4px rgba(0, 0, 0, 0.1);
-  --shadow-chat: 0 4px 20px -2px rgba(0, 0, 0, 0.08);
 
   /* Border Radius */
   --radius-sm: 0.5rem;
@@ -330,7 +347,6 @@
 
   /* Shimmer loading effect */
   .shimmer {
-    @apply animate-shimmer;
     background: linear-gradient(
       90deg,
       #f0f0f0 0%,
@@ -338,6 +354,7 @@
       #f0f0f0 100%
     );
     background-size: 200% 100%;
+    animation: shimmer 2s linear infinite;
   }
 }
 
