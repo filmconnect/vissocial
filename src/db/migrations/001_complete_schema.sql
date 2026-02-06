@@ -410,6 +410,11 @@ INSERT INTO bandit_arms (id, name, params) VALUES
    '{"format":"story","pillar":"engagement","hook_type":"question","caption_length":"short","cta_type":"poll","scene_template":"story_text","promo_level":0.05}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
+
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_external_id ON assets(external_id) WHERE external_id IS NOT NULL;
+
+
 -- ============================================================
 -- DONE
 -- ============================================================
