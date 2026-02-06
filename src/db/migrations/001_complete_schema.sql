@@ -159,8 +159,13 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id
 CREATE TABLE IF NOT EXISTS chat_notifications (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
-  payload JSONB NOT NULL DEFAULT '{}',
+  title TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  data JSONB DEFAULT '{}',
+  chips JSONB DEFAULT '[]',
+  payload JSONB NOT NULL DEFAULT '{}',  -- legacy, keep for backward compat
   read BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
