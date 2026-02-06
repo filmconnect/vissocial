@@ -153,7 +153,7 @@ function AIAvatar() {
 }
 
 // ============================================================
-// SKELETON COMPONENTS
+// SKELETON COMPONENTS (kept for reference / fallback)
 // ============================================================
 
 function SkeletonBlock({ className = "", style }: { className?: string; style?: React.CSSProperties }) {
@@ -165,9 +165,7 @@ function SkeletonBlock({ className = "", style }: { className?: string; style?: 
 function HeaderSkeleton() {
   return (
     <div className="flex items-start gap-4 p-6 sm:p-8">
-      {/* Circle avatar */}
       <SkeletonBlock className="w-12 h-12 rounded-full flex-shrink-0" />
-      {/* Title lines */}
       <div className="flex-1 space-y-3 pt-1">
         <SkeletonBlock className="h-5 w-[200px] max-w-full" />
         <SkeletonBlock className="h-4 w-[300px] max-w-full" />
@@ -194,20 +192,17 @@ function USPSkeleton() {
   return (
     <div className="px-6 sm:px-8 py-5 border-t border-gray-100 space-y-4">
       <SkeletonBlock className="h-5 w-[140px]" />
-      {/* Paragraph 1 */}
       <div className="space-y-2">
         <SkeletonBlock className="h-3.5 w-full" />
         <SkeletonBlock className="h-3.5 w-[95%]" />
         <SkeletonBlock className="h-3.5 w-[88%]" />
         <SkeletonBlock className="h-3.5 w-[72%]" />
       </div>
-      {/* Paragraph 2 */}
       <div className="space-y-2">
         <SkeletonBlock className="h-3.5 w-full" />
         <SkeletonBlock className="h-3.5 w-[90%]" />
         <SkeletonBlock className="h-3.5 w-[80%]" />
       </div>
-      {/* Paragraph 3 */}
       <div className="space-y-2">
         <SkeletonBlock className="h-3.5 w-[96%]" />
         <SkeletonBlock className="h-3.5 w-[85%]" />
@@ -234,6 +229,86 @@ function FullSkeleton() {
       <QuickFactsSkeleton />
       <USPSkeleton />
       <ActionSkeleton />
+    </div>
+  );
+}
+
+// ============================================================
+// ANALYZING CARD — real header + animated loading message
+// Shows instantly while API works in background (replaces skeleton)
+// ============================================================
+
+function AnalyzingCard({ handle }: { handle: string }) {
+  const [dots, setDots] = useState("");
+  const [stepIdx, setStepIdx] = useState(0);
+
+  const steps = [
+    "Dohvaćam podatke profila",
+    "Analiziram brand identitet",
+    "Generiranje USP analize",
+    "Pripremam preporuke",
+  ];
+
+  // Animated dots: . → .. → ... → (reset)
+  useEffect(() => {
+    const t = setInterval(() => setDots(d => d.length >= 3 ? "" : d + "."), 500);
+    return () => clearInterval(t);
+  }, []);
+
+  // Step progression every 3s
+  useEffect(() => {
+    const t = setInterval(() => {
+      setStepIdx(i => (i < steps.length - 1 ? i + 1 : i));
+    }, 3000);
+    return () => clearInterval(t);
+  }, [steps.length]);
+
+  return (
+    <div className="bg-white rounded-none sm:rounded-2xl shadow-none sm:shadow-[var(--shadow-card)] overflow-hidden">
+      {/* Real header — shows instantly */}
+      <div className="flex items-start gap-4 p-6 sm:p-8">
+        <AIAvatar />
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-bold text-gray-900 truncate">
+            Profile analysis: @{handle}
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Analiziram tvoj Instagram profil. Ovo obično traje 5–15 sekundi.
+          </p>
+        </div>
+      </div>
+
+      {/* Animated loading area */}
+      <div className="border-t border-gray-100">
+        <div className="px-6 sm:px-8 py-12 flex flex-col items-center text-center">
+          {/* Spinner */}
+          <div className="relative mb-5">
+            <div className="w-12 h-12 rounded-full border-[3px] border-gray-200" />
+            <div className="absolute inset-0 w-12 h-12 rounded-full border-[3px] border-transparent border-t-emerald-500 animate-spin" />
+          </div>
+
+          {/* Current step text */}
+          <p className="text-sm font-medium text-gray-700">
+            {steps[stepIdx]}{dots}
+          </p>
+
+          {/* Progress dots */}
+          <div className="flex items-center gap-1.5 mt-4">
+            {steps.map((_, i) => (
+              <div
+                key={i}
+                className={`h-1.5 rounded-full transition-all duration-500 ${
+                  i <= stepIdx ? "w-6 bg-emerald-400" : "w-1.5 bg-gray-200"
+                }`}
+              />
+            ))}
+          </div>
+
+          <p className="text-xs text-gray-400 mt-6">
+            AI analiza zahtijeva malo više vremena pri prvom pokretanju
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -393,7 +468,7 @@ export default function ProfileAnalysisClient({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Timeout timer — pass reason so we can distinguish from cleanup abort
+    // Timeout timer — pass reason to distinguish from StrictMode cleanup
     const timeoutId = setTimeout(() => {
       controller.abort("timeout");
     }, TIMEOUT_MS);
@@ -450,12 +525,12 @@ export default function ProfileAnalysisClient({
       clearTimeout(timeoutId);
 
       if (err instanceof DOMException && err.name === "AbortError") {
-        // Only show timeout if it was actually from the timer, not from StrictMode cleanup
+        // Only show error for actual timeouts, not StrictMode cleanup
         if (controller.signal.reason === "timeout") {
           setError({ type: "timeout", message: "Request timed out" });
           setLoading(false);
         }
-        // If aborted by cleanup (no reason), silently ignore — new mount will retry
+        // Cleanup aborts (no reason) — silently ignore, new mount will retry
         return;
       } else if (
         err instanceof TypeError &&
@@ -527,8 +602,8 @@ export default function ProfileAnalysisClient({
       totalSteps={6}
       stepTitle="Profile analysis"
     >
-      {/* ---- LOADING SKELETON ---- */}
-      {loading && <FullSkeleton />}
+      {/* ---- LOADING STATE ---- */}
+      {loading && <AnalyzingCard handle={cleanHandle} />}
 
       {/* ---- ERROR STATE ---- */}
       {!loading && error && (
