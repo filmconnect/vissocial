@@ -17,6 +17,7 @@ async function putObjectBlob(key: string, body: Buffer, contentType: string): Pr
   const blob = await put(key, body, {
     access: "public",
     contentType,
+	allowOverwrite: true,
   });
   
   return blob.url;

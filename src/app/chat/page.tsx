@@ -564,7 +564,8 @@ function ChatPageContent() {
         console.error("Product action failed:", e);
       }
       setBusy(false);
-      handleChipAction(value);
+      // Don't call handleChipAction — product confirm is self-contained,
+      // no chat message should be sent. The chip UI handles its own state.
       return;
     }
 

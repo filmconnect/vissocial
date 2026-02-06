@@ -414,6 +414,9 @@ ON CONFLICT (id) DO NOTHING;
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_external_id ON assets(external_id) WHERE external_id IS NOT NULL;
 
+ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
+ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram_vision';
+
 
 -- ============================================================
 -- DONE
