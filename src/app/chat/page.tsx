@@ -1,33 +1,21 @@
 // ============================================================
-// CHAT PAGE - DESIGN SYSTEM V2 PATCH
+// CHAT PAGE - WITH ANALYZE FLOW INTEGRATION
 // ============================================================
-// Changes from PATCH_PLAN.md:
-// 1. IMPORTI: -Card, -Badge, +ChatBubble, +ChatLayout, +ActionButton, +ActionFooter
-// 2. MSG TIP: +metadata polje
-// 3. ADAPTER: toDesignMessage() — stari Msg → novi ChatMessage
-// 4. BUBBLE: OBRISANA — zamijenjeno s ChatBubble
-// 5. CHIPBUTTON: ZADRŽAN — ne brisan, ne mijenjan
-// 6. WRAPPER: Card → ChatLayout
-// 7. MESSAGE LOOP: Bubble → ChatBubble + handleSmartChipClick
-// 8. INPUT: Fixed bottom position izvan ChatLayout-a
-// 9. normalizeMessages: +metadata field
+// Fixes:
+// 1. Duplirane poruke - React.StrictMode safe, deduplication
+// 2. Notification polling s mark-as-read
+// 3. Instagram OAuth callback handling
+// 4. Step 0 initial flow (prije OAuth)
+// 5. SUSPENSE BOUNDARY for useSearchParams
+// 6. NEW: from=analyze flow — auto-sends handle when coming from /analyze page
 // ============================================================
 
 "use client";
 
-// ============================================================
-// IZMJENA 1: Importi
-// ZADRŽANO: Suspense, useEffect, useRef, useState, useCallback,
-//           useSearchParams, useRouter
-// UKLONJENO: Card, Badge
-// DODANO: ChatBubble, ActionButton, ActionFooter, ChatLayout,
-//         ChatMessage, ChatChipData tipovi
-// ============================================================
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ChatBubble, ActionButton, ActionFooter } from "@/ui/ChatBubble";
-import { ChatLayout } from "@/ui/ChatLayout";
-import type { ChatMessage, ChatChipData } from "@/ui/ChatBubble";
+import { Card } from "@/ui/Card";
+import { Badge } from "@/ui/Badge";
 
 // ============================================================
 // Types
@@ -45,17 +33,11 @@ type Chip = string | {
   accept?: string;
 };
 
-// IZMJENA 2: Msg tip proširen s metadata poljem
 type Msg = {
   id: string;
   role: "assistant" | "user";
   text: string;
   chips?: Chip[];
-  metadata?: {
-    title?: string;
-    subtitle?: string;
-    fields?: { label: string; value: string }[];
-  };
 };
 
 type Notification = {
@@ -68,7 +50,6 @@ type Notification = {
 };
 
 // ============================================================
-// IZMJENA 5: ChipButton — ZADRŽAN NETAKNUT
 // Chip Component (simplified version)
 // ============================================================
 
@@ -264,9 +245,43 @@ function ChipButton({
 }
 
 // ============================================================
-// IZMJENA 4: Stara Bubble komponenta — OBRISANA
-// Zamijenjeno s ChatBubble iz design systema
+// Message Bubble
 // ============================================================
+
+function Bubble({
+  m,
+  onChipAction,
+  onFileUpload,
+  disabled
+}: {
+  m: Msg;
+  onChipAction?: (value: string) => void;
+  onFileUpload?: (file: File, uploadType: string) => void;
+  disabled?: boolean;
+}) {
+  const isAssistant = m.role === "assistant";
+
+  return (
+    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+      isAssistant ? "bg-zinc-100 text-zinc-900" : "ml-auto bg-zinc-900 text-white"
+    }`}>
+      <div className="whitespace-pre-wrap">{m.text}</div>
+      {m.chips?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {m.chips.map((chip, idx) => (
+            <ChipButton
+              key={typeof chip === "string" ? chip : `${chip.label}-${idx}`}
+              chip={chip}
+              onAction={onChipAction}
+              onFileUpload={onFileUpload}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 // ============================================================
 // Main Chat Page Content (uses useSearchParams)
@@ -288,6 +303,9 @@ function ChatPageContent() {
   const processedNotifRef = useRef<Set<string>>(new Set());
   const sentMessagesRef = useRef<Set<string>>(new Set());
 
+  // NEW: Ref to hold handle from analyze flow
+  const fromAnalyzeRef = useRef<string | null>(null);
+
   // ============================================================
   // Scroll to bottom on new messages
   // ============================================================
@@ -297,11 +315,54 @@ function ChatPageContent() {
 
   // ============================================================
   // Initialize session (StrictMode safe)
+  // MODIFIED: Added from=analyze handling
   // ============================================================
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
 
+    // NEW: Check if coming from /analyze page
+    const fromParam = searchParams.get("from");
+    if (fromParam === "analyze") {
+      // Read analyze result from localStorage
+      try {
+        const stored = localStorage.getItem("analyze_result");
+        if (stored) {
+          const result = JSON.parse(stored);
+          // Extract handle from analyze result
+          const analyzeHandle = result?.basic?.handle
+            || result?.input?.replace(/^@/, "")
+            || "";
+          if (analyzeHandle) {
+            fromAnalyzeRef.current = analyzeHandle;
+          }
+        }
+      } catch (e) {
+        console.debug("Failed to parse analyze_result:", e);
+      }
+      // Clean up localStorage
+      localStorage.removeItem("analyze_result");
+      // Force new session for analyze flow
+      localStorage.removeItem("chat_session_id");
+      // Clean URL
+      router.replace("/chat", { scroll: false });
+      // Create fresh session (the fromAnalyze useEffect below will auto-send)
+      createSession();
+      return;
+    }
+
+    // EXISTING: Normal init — backward compatible with ?analyze=X
+    const analyzeParam = searchParams.get("analyze");
+    if (analyzeParam) {
+      // Legacy flow: someone navigated to /chat?analyze=X directly
+      fromAnalyzeRef.current = analyzeParam.replace(/^@/, "");
+      localStorage.removeItem("chat_session_id");
+      router.replace("/chat", { scroll: false });
+      createSession();
+      return;
+    }
+
+    // EXISTING: Normal session restore
     const sid = localStorage.getItem("chat_session_id");
     if (sid) {
       setSessionId(sid);
@@ -316,6 +377,21 @@ function ChatPageContent() {
       }
     };
   }, []);
+
+  // ============================================================
+  // NEW: Auto-send handle message when session is ready after analyze
+  // ============================================================
+  useEffect(() => {
+    if (!sessionId || !fromAnalyzeRef.current) return;
+
+    const handle = fromAnalyzeRef.current;
+    fromAnalyzeRef.current = null; // Clear so it doesn't fire again
+
+    // Send the handle as a message — this triggers the existing
+    // scraping flow in message/route.ts without any backend changes
+    sendMessage(`Brzi pregled: @${handle}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // ============================================================
   // Handle Instagram OAuth callback
@@ -397,111 +473,15 @@ function ChatPageContent() {
   }
 
   // ============================================================
-  // IZMJENA 11: Normalize messages — dodano metadata polje
+  // Normalize messages
   // ============================================================
   function normalizeMessages(messages: any[]): Msg[] {
     return messages.map(m => ({
       id: m.id,
       role: m.role,
       text: m.text,
-      chips: m.chips || m.meta?.chips || [],
-      metadata: m.metadata || m.meta?.metadata || undefined
+      chips: m.chips || m.meta?.chips || []
     }));
-  }
-
-  // ============================================================
-  // IZMJENA 3: Adapter — toDesignMessage()
-  // Konvertira stari Msg + Chip[] → novi ChatMessage format
-  // ============================================================
-  function toDesignMessage(m: Msg): ChatMessage {
-    return {
-      id: m.id,
-      role: m.role,
-      content: m.text,
-      metadata: m.metadata,
-      chips: m.chips?.map(chip => {
-        if (typeof chip === "string") {
-          return { type: "suggestion" as const, label: chip, value: chip };
-        }
-        return {
-          type: (chip.type || "suggestion") as ChatChipData["type"],
-          label: chip.label,
-          value: chip.value || chip.label,
-          href: chip.href,
-          productId: chip.productId,
-          action: chip.action,
-          assetId: chip.assetId,
-          uploadType: chip.uploadType,
-          accept: chip.accept,
-        } as ChatChipData;
-      }),
-    };
-  }
-
-  // ============================================================
-  // IZMJENA 8: handleSmartChipClick — bridge za specijalne chipove
-  // ChatBubble šalje value string, ali trebamo full chip objekt
-  // za file_upload, navigation, product_confirm, asset_delete
-  // ============================================================
-  async function handleSmartChipClick(chip: Chip, value: string) {
-    if (typeof chip === "string") {
-      handleChipAction(value);
-      return;
-    }
-
-    // Navigation
-    if (chip.type === "navigation" && chip.href) {
-      router.push(chip.href);
-      return;
-    }
-
-    // File upload — treba triggerati file input
-    if (chip.type === "file_upload") {
-      const fileInput = document.createElement("input");
-      fileInput.type = "file";
-      fileInput.accept = chip.accept || "image/*";
-      fileInput.onchange = (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) handleFileUpload(file, chip.uploadType || "style_reference");
-      };
-      fileInput.click();
-      return;
-    }
-
-    // Asset delete
-    if (chip.type === "asset_delete" && chip.assetId) {
-      if (!confirm("Obrisati ovu referencu?")) return;
-      setBusy(true);
-      try {
-        await fetch(`/api/assets/${chip.assetId}`, { method: "DELETE" });
-        sendMessage(`Referenca obrisana: ${chip.assetId}`);
-      } catch (e) {
-        console.error("Delete failed:", e);
-      }
-      setBusy(false);
-      return;
-    }
-
-    // Product confirm/reject
-    if (chip.type === "product_confirm" && chip.productId) {
-      setBusy(true);
-      try {
-        const endpoint = chip.action === "reject" ? "/api/products/reject" : "/api/products/confirm";
-        await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ product_id: chip.productId })
-        });
-      } catch (e) {
-        console.error("Product action failed:", e);
-      }
-      setBusy(false);
-      handleChipAction(value);
-      return;
-    }
-
-    // Default — treat as text
-    handleChipAction(value);
   }
 
   // ============================================================
@@ -719,73 +699,62 @@ function ChatPageContent() {
   }
 
   // ============================================================
-  // IZMJENA 6 + 7 + 9: Render
-  // Card → ChatLayout, Bubble → ChatBubble, Input → Fixed bottom
+  // Render
   // ============================================================
   return (
-    <>
-      <ChatLayout
-        currentStep={1}
-        totalSteps={6}
-        stepTitle="Profile analysis"
-      >
-        {/* Nova sesija button — MORA OSTATI */}
-        <div className="flex justify-end mb-4">
-          <button
-            onClick={resetSession}
-            className="rounded-lg border border-lavender-200 bg-white/80 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-white hover:text-gray-900 transition-colors"
-            title="Započni novu sesiju"
-          >
-            🔄 Nova sesija
-          </button>
+    <main className="space-y-4">
+      <Card>
+        <div className="flex items-center justify-between">
+          <div className="text-base font-semibold">Chat</div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={resetSession}
+              className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 transition-colors"
+              title="Započni novu sesiju"
+            >
+              🔄 Nova sesija
+            </button>
+            <Badge tone="info">Onboarding + commands</Badge>
+          </div>
         </div>
 
-        {/* IZMJENA 7: Message area — ChatBubble + handleSmartChipClick */}
-        <div className="space-y-4 pb-32">
-          {msgs.map(m => (
-            <ChatBubble
-              key={m.id}
-              message={toDesignMessage(m)}
-              onChipClick={(value) => {
-                // Pronađi originalni chip objekt za full handling
-                const originalChip = m.chips?.find(c =>
-                  typeof c === "string" ? c === value : (c.value || c.label) === value
-                );
-                if (originalChip && typeof originalChip !== "string") {
-                  // Delegiraj na staru ChipButton logiku
-                  // file_upload, asset_delete, product_confirm, navigation
-                  handleSmartChipClick(originalChip, value);
-                } else {
-                  handleChipAction(value);
-                }
-              }}
-              disabled={busy}
-            />
-          ))}
-          <div ref={endRef} />
+        <div className="mt-4 h-[70vh] overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="flex flex-col gap-3">
+            {msgs.map(m => (
+              <Bubble
+                key={m.id}
+                m={m}
+                onChipAction={handleChipAction}
+                onFileUpload={handleFileUpload}
+                disabled={busy}
+              />
+            ))}
+            <div ref={endRef} />
+          </div>
         </div>
-      </ChatLayout>
 
-      {/* IZMJENA 9: Input form — Fixed bottom position IZVAN ChatLayout-a */}
-      <div className="fixed bottom-0 left-0 right-0 bg-lavender-100/95 backdrop-blur-md border-t border-lavender-200/50 p-4 z-40">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto flex gap-3">
+        <form onSubmit={handleSubmit} className="mt-3 flex gap-2">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder={busy ? "Thinking…" : "Napiši poruku..."}
-            className="flex-1 px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
+            placeholder={busy ? "Thinking…" : "Napiši poruku... (npr. 'poveži instagram', 'generiraj plan', 'export')"}
+            className="flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-900/10"
             disabled={busy}
           />
           <button
             type="submit"
             disabled={busy || !input.trim()}
-            className="btn-primary px-6 py-3 rounded-xl font-semibold text-sm disabled:opacity-60"
+            className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
             Send
           </button>
         </form>
-      </div>
-    </>
+
+        <div className="mt-2 text-xs text-zinc-500">
+          Tip: onboarding ide kroz chat. Kad povežeš Instagram u Settings, chat će automatski povući sadržaj i predložiti plan.
+        </div>
+      </Card>
+    </main>
   );
 }
 

@@ -1,8 +1,8 @@
 // ============================================================
 // LANDING PAGE
 // ============================================================
-// Vissocial - AI that plans, creates, and improves your
-// Instagram content.
+// Vissocial - Landing page with Instagram handle input
+// Redirects to /analyze/[handle] for profile analysis
 // ============================================================
 
 "use client";
@@ -10,17 +10,34 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  SparklesIcon,
-  CalendarIcon,
-  PhotoIcon,
-  CheckIcon,
-  LoadingSpinner,
-} from "@/ui/Icons";
 
 // ============================================================
-// Icons (layout-specific, not in shared Icons library)
+// Icons
 // ============================================================
+
+function CheckIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+    </svg>
+  );
+}
+
+function PhotoIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 002.25-2.25V5.25a2.25 2.25 0 00-2.25-2.25H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
+    </svg>
+  );
+}
 
 function DocumentIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
@@ -37,11 +54,9 @@ function DocumentIcon({ className = "w-5 h-5" }: { className?: string }) {
 function BrandLogo() {
   return (
     <div className="flex items-center gap-2.5">
-      {/* Logo icon - yellow notepad */}
       <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-400 to-primary-500 flex items-center justify-center shadow-sm">
         <DocumentIcon className="w-5 h-5 text-gray-900" />
       </div>
-      {/* Brand text */}
       <span className="text-xl font-semibold text-gray-900">
         Vissocial
       </span>
@@ -58,12 +73,10 @@ function Header() {
     <header className="fixed top-0 left-0 right-0 z-50 bg-lavender-100/80 backdrop-blur-md border-b border-lavender-200/50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          {/* Logo */}
           <Link href="/">
             <BrandLogo />
           </Link>
 
-          {/* Navigation */}
           <nav className="flex items-center gap-6">
             <Link 
               href="/pricing" 
@@ -129,22 +142,11 @@ export default function LandingPage() {
   // Parse and normalize handle
   const normalizeHandle = (input: string): string => {
     let cleaned = input.trim();
-    
-    // Remove https:// or http://
     cleaned = cleaned.replace(/^https?:\/\//, "");
-    
-    // Remove www.
     cleaned = cleaned.replace(/^www\./, "");
-    
-    // Remove instagram.com/
     cleaned = cleaned.replace(/^instagram\.com\//, "");
-    
-    // Remove @ prefix
     cleaned = cleaned.replace(/^@/, "");
-    
-    // Remove trailing slash and anything after
     cleaned = cleaned.split("/")[0];
-    
     return cleaned;
   };
 
@@ -157,7 +159,6 @@ export default function LandingPage() {
       return;
     }
 
-    // Basic validation
     if (!/^[a-zA-Z0-9._]+$/.test(normalized)) {
       setError("Invalid Instagram handle format");
       return;
@@ -167,16 +168,14 @@ export default function LandingPage() {
     setError("");
 
     try {
-      // Navigate to chat with the handle as a parameter
-      // The chat will handle the scraping
-      router.push(`/chat?analyze=${encodeURIComponent(normalized)}`);
+      // CHANGED: Navigate to /analyze/[handle] instead of /chat?analyze=X
+      router.push(`/analyze/${encodeURIComponent(normalized)}`);
     } catch (err) {
       setError("Something went wrong. Please try again.");
       setLoading(false);
     }
   };
 
-  // Handle Enter key
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       handleAnalyze();
@@ -185,32 +184,25 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-gradient-lavender">
-      {/* Header */}
       <Header />
 
-      {/* Main Content */}
       <main className="pt-32 pb-20 px-4">
         <div className="max-w-3xl mx-auto text-center">
-          {/* Headline */}
           <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 leading-tight tracking-tight">
             AI that plans, creates, and improves your{" "}
             <span className="text-gray-900">Instagram content.</span>
           </h1>
 
-          {/* Subheadline */}
           <p className="mt-5 text-lg text-gray-600 max-w-2xl mx-auto">
             Create your next 30 days of posts — automatically, from your existing profile.
           </p>
 
-          {/* Input Card */}
           <div className="mt-10 max-w-lg mx-auto">
             <div className="bg-white rounded-2xl shadow-card p-6">
-              {/* Label */}
               <p className="text-sm font-medium text-gray-700 mb-3">
                 Paste your Instagram profile
               </p>
 
-              {/* Input */}
               <div className="relative">
                 <input
                   type="text"
@@ -233,12 +225,10 @@ export default function LandingPage() {
                 />
               </div>
 
-              {/* Error message */}
               {error && (
                 <p className="mt-2 text-sm text-red-500">{error}</p>
               )}
 
-              {/* CTA Button */}
               <button
                 onClick={handleAnalyze}
                 disabled={loading}
@@ -254,7 +244,10 @@ export default function LandingPage() {
               >
                 {loading ? (
                   <>
-                    <LoadingSpinner className="w-5 h-5" />
+                    <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
                     Analyzing...
                   </>
                 ) : (
@@ -262,22 +255,20 @@ export default function LandingPage() {
                 )}
               </button>
 
-              {/* See example link */}
+              {/* CHANGED: Navigate to /analyze/nike instead of /chat?analyze=nike */}
               <button
-                onClick={() => router.push("/chat?analyze=nike")}
+                onClick={() => router.push("/analyze/nike")}
                 className="mt-3 text-sm text-violet-600 hover:text-violet-700 hover:underline transition-colors"
               >
                 See an example
               </button>
             </div>
 
-            {/* Trust text */}
             <p className="mt-4 text-sm text-gray-500">
               No login needed. We never post without your approval.
             </p>
           </div>
 
-          {/* Features */}
           <div className="mt-16 grid grid-cols-1 sm:grid-cols-3 gap-8 max-w-3xl mx-auto">
             <FeatureItem
               icon={<CheckIcon className="w-5 h-5" />}
@@ -293,14 +284,12 @@ export default function LandingPage() {
             />
           </div>
 
-          {/* Bottom text */}
           <p className="mt-16 text-sm text-gray-500 max-w-xl mx-auto">
             Our AI works on your content — and improves it over time based on real engagement.
           </p>
         </div>
       </main>
 
-      {/* Footer decoration - subtle wave */}
       <div className="fixed bottom-0 left-0 right-0 h-32 pointer-events-none overflow-hidden">
         <svg 
           className="absolute bottom-0 w-full h-32 text-lavender-200/30"
