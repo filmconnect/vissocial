@@ -15,7 +15,6 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card } from "@/ui/Card";
-import { Badge } from "@/ui/Badge";
 
 // ============================================================
 // Types
@@ -380,6 +379,7 @@ function ChatPageContent() {
 
   // ============================================================
   // NEW: Auto-send handle message when session is ready after analyze
+  // Uses direct API call instead of sendMessage to avoid stale closure
   // ============================================================
   useEffect(() => {
     if (!sessionId || !fromAnalyzeRef.current) return;
@@ -387,10 +387,41 @@ function ChatPageContent() {
     const handle = fromAnalyzeRef.current;
     fromAnalyzeRef.current = null; // Clear so it doesn't fire again
 
-    // Send the handle as a message — this triggers the existing
-    // scraping flow in message/route.ts without any backend changes
-    sendMessage(`Brzi pregled: @${handle}`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const text = `Brzi pregled: @${handle}`;
+
+    (async () => {
+      const userMsg: Msg = {
+        id: "temp_analyze_" + Date.now(),
+        role: "user",
+        text,
+      };
+      setMsgs((prev) => [...prev, userMsg]);
+      setBusy(true);
+
+      try {
+        const res = await fetch("/api/chat/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, text }),
+        });
+
+        const data = await res.json();
+
+        if (data.new_messages) {
+          setMsgs((prev) => {
+            const withoutTemp = prev.filter((m) => m.id !== userMsg.id);
+            const normalized = normalizeMessages(data.new_messages);
+            const existingIds = new Set(withoutTemp.map((m) => m.id));
+            const newMsgs = normalized.filter((m) => !existingIds.has(m.id));
+            return [...withoutTemp, userMsg, ...newMsgs];
+          });
+        }
+      } catch (err) {
+        console.error("Auto-send analyze handle failed:", err);
+      }
+
+      setBusy(false);
+    })();
   }, [sessionId]);
 
   // ============================================================
@@ -714,7 +745,9 @@ function ChatPageContent() {
             >
               🔄 Nova sesija
             </button>
-            <Badge tone="info">Onboarding + commands</Badge>
+            <span className="px-2 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full">
+              Onboarding + commands
+            </span>
           </div>
         </div>
 
