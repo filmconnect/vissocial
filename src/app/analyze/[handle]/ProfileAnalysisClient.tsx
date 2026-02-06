@@ -164,7 +164,7 @@ function SkeletonBlock({ className = "", style }: { className?: string; style?: 
 
 function HeaderSkeleton() {
   return (
-    <div className="flex items-start gap-4 p-6 sm:p-8">
+    <div className="flex items-start gap-4 p-4 sm:p-6">
       <SkeletonBlock className="w-12 h-12 rounded-full flex-shrink-0" />
       <div className="flex-1 space-y-3 pt-1">
         <SkeletonBlock className="h-5 w-[200px] max-w-full" />
@@ -177,7 +177,7 @@ function HeaderSkeleton() {
 function QuickFactsSkeleton() {
   const widths = [140, 200, 170, 150, 100];
   return (
-    <div className="px-6 sm:px-8 py-5 border-t border-gray-100 space-y-3">
+    <div className="px-4 sm:px-6 py-3 border-t border-gray-100 space-y-3">
       {widths.map((w, i) => (
         <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-0">
           <SkeletonBlock className="h-4 w-[100px] sm:w-[120px]" />
@@ -190,7 +190,7 @@ function QuickFactsSkeleton() {
 
 function USPSkeleton() {
   return (
-    <div className="px-6 sm:px-8 py-5 border-t border-gray-100 space-y-4">
+    <div className="px-4 sm:px-6 py-3 border-t border-gray-100 space-y-4">
       <SkeletonBlock className="h-5 w-[140px]" />
       <div className="space-y-2">
         <SkeletonBlock className="h-3.5 w-full" />
@@ -203,18 +203,13 @@ function USPSkeleton() {
         <SkeletonBlock className="h-3.5 w-[90%]" />
         <SkeletonBlock className="h-3.5 w-[80%]" />
       </div>
-      <div className="space-y-2">
-        <SkeletonBlock className="h-3.5 w-[96%]" />
-        <SkeletonBlock className="h-3.5 w-[85%]" />
-        <SkeletonBlock className="h-3.5 w-[60%]" />
-      </div>
     </div>
   );
 }
 
 function ActionSkeleton() {
   return (
-    <div className="px-6 sm:px-8 py-6 border-t border-gray-100 flex flex-col items-end gap-3">
+    <div className="px-4 sm:px-6 py-4 border-t border-gray-100 flex flex-col items-end gap-3">
       <SkeletonBlock className="h-11 w-[220px] rounded-xl" />
       <SkeletonBlock className="h-4 w-[150px]" />
       <SkeletonBlock className="h-3 w-[250px]" />
@@ -249,13 +244,11 @@ function AnalyzingCard({ handle }: { handle: string }) {
     "Pripremam preporuke",
   ];
 
-  // Animated dots: . → .. → ... → (reset)
   useEffect(() => {
     const t = setInterval(() => setDots(d => d.length >= 3 ? "" : d + "."), 500);
     return () => clearInterval(t);
   }, []);
 
-  // Step progression every 3s
   useEffect(() => {
     const t = setInterval(() => {
       setStepIdx(i => (i < steps.length - 1 ? i + 1 : i));
@@ -265,8 +258,7 @@ function AnalyzingCard({ handle }: { handle: string }) {
 
   return (
     <div className="bg-white rounded-none sm:rounded-2xl shadow-none sm:shadow-[var(--shadow-card)] overflow-hidden">
-      {/* Real header — shows instantly */}
-      <div className="flex items-start gap-4 p-6 sm:p-8">
+      <div className="flex items-start gap-4 p-4 sm:p-6">
         <AIAvatar />
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-gray-900 truncate">
@@ -277,22 +269,15 @@ function AnalyzingCard({ handle }: { handle: string }) {
           </p>
         </div>
       </div>
-
-      {/* Animated loading area */}
       <div className="border-t border-gray-100">
-        <div className="px-6 sm:px-8 py-12 flex flex-col items-center text-center">
-          {/* Spinner */}
+        <div className="px-4 sm:px-6 py-10 flex flex-col items-center text-center">
           <div className="relative mb-5">
             <div className="w-12 h-12 rounded-full border-[3px] border-gray-200" />
             <div className="absolute inset-0 w-12 h-12 rounded-full border-[3px] border-transparent border-t-emerald-500 animate-spin" />
           </div>
-
-          {/* Current step text */}
           <p className="text-sm font-medium text-gray-700">
             {steps[stepIdx]}{dots}
           </p>
-
-          {/* Progress dots */}
           <div className="flex items-center gap-1.5 mt-4">
             {steps.map((_, i) => (
               <div
@@ -303,7 +288,6 @@ function AnalyzingCard({ handle }: { handle: string }) {
               />
             ))}
           </div>
-
           <p className="text-xs text-gray-400 mt-6">
             AI analiza zahtijeva malo više vremena pri prvom pokretanju
           </p>
@@ -333,23 +317,16 @@ function ErrorCard({
 
   return (
     <div className="bg-white rounded-none sm:rounded-2xl shadow-none sm:shadow-[var(--shadow-card)] overflow-hidden">
-      <div className="px-6 sm:px-8 py-12 flex flex-col items-center text-center">
-        {/* Icon */}
+      <div className="px-4 sm:px-6 py-12 flex flex-col items-center text-center">
         <div className="mb-4">{config.icon}</div>
-
-        {/* Title */}
         <h2 className="text-lg font-semibold text-gray-900 mb-2">
           {config.title}
         </h2>
-
-        {/* Description */}
         <p className="text-sm text-gray-500 max-w-md mb-1">
           {error.type === "not_found"
             ? `Ne možemo pronaći profil @${cleanHandle}. Provjerite korisničko ime.`
             : config.description}
         </p>
-
-        {/* Buttons */}
         <div className="mt-6 flex flex-col items-center gap-3">
           {config.actionType === "retry" ? (
             <button
@@ -366,7 +343,6 @@ function ErrorCard({
               {config.actionLabel}
             </button>
           )}
-
           {config.actionType === "retry" && (
             <button
               onClick={onBack}
@@ -460,7 +436,6 @@ export default function ProfileAnalysisClient({
     setError(null);
     setData(null);
 
-    // Abort previous request if any
     if (abortRef.current) {
       abortRef.current.abort();
     }
@@ -489,7 +464,6 @@ export default function ProfileAnalysisClient({
           setLoading(false);
           return;
         }
-        // Try to read error body
         const errBody = await res.json().catch(() => ({}));
         if (
           errBody.error?.toLowerCase().includes("not found") ||
@@ -620,13 +594,13 @@ export default function ProfileAnalysisClient({
         <div className="bg-white rounded-none sm:rounded-2xl shadow-none sm:shadow-[var(--shadow-card)] overflow-hidden">
           {/* ========== A) HEADER ========== */}
           <FadeInSection delay={0} show>
-            <div className="flex items-start gap-4 p-6 sm:p-8">
+            <div className="flex items-start gap-4 p-4 sm:p-5">
               <AIAvatar />
               <div className="flex-1 min-w-0">
                 <h1 className="text-lg font-bold text-gray-900 truncate">
                   Profile analysis: @{cleanHandle}
                 </h1>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="text-sm text-gray-500 mt-0.5">
                   Here is a profile analysis based on your public Instagram
                   presence. Let&apos;s dive in.
                 </p>
@@ -637,7 +611,7 @@ export default function ProfileAnalysisClient({
           {/* ========== B) QUICK FACTS ========== */}
           {hasAnalysis && (
             <FadeInSection delay={200} show>
-              <div className="px-6 sm:px-8 py-5 border-t border-gray-100 space-y-2.5">
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 space-y-1.5">
                 {analysis.company && (
                   <FactRow label="Company" value={analysis.company} />
                 )}
@@ -663,8 +637,8 @@ export default function ProfileAnalysisClient({
           {/* ========== C) USP ANALYSIS ========== */}
           {hasAnalysis && analysis.usp_analysis && (
             <FadeInSection delay={400} show>
-              <div className="px-6 sm:px-8 py-5 border-t border-gray-100">
-                <h2 className="text-base font-semibold text-gray-900 mb-3">
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100">
+                <h2 className="text-base font-semibold text-gray-900 mb-2">
                   USP analysis
                 </h2>
                 <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
@@ -674,24 +648,43 @@ export default function ProfileAnalysisClient({
             </FadeInSection>
           )}
 
-          {/* ========== D) RECOMMENDED FOCUS ========== */}
-          {hasAnalysis && analysis.recommended_focus && (
-            <FadeInSection delay={600} show>
-              <div className="px-6 sm:px-8 py-5 border-t border-gray-100">
-                <h2 className="text-base font-semibold text-gray-900 mb-3">
-                  Recommended focus (next 30 days)
-                </h2>
-                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                  {analysis.recommended_focus}
+          {/* ========== D+E) RECOMMENDED FOCUS + ACTION FOOTER (combined) ========== */}
+          <FadeInSection delay={hasAnalysis ? 600 : 200} show>
+            <div className="px-4 sm:px-5 py-4 border-t border-gray-100">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                {/* Left: heading */}
+                {hasAnalysis && analysis.recommended_focus && (
+                  <h2 className="text-base font-semibold text-gray-900 pt-1">
+                    Recommended focus (next 30 days)
+                  </h2>
+                )}
+
+                {/* Right: action buttons */}
+                <div className="flex flex-col items-end gap-2 sm:flex-shrink-0">
+                  <button
+                    onClick={handleContinue}
+                    className="px-6 py-2.5 text-sm font-semibold text-gray-900 bg-primary-500 hover:bg-primary-600 rounded-xl transition-all duration-200 shadow-[var(--shadow-button)] hover:shadow-md active:scale-[0.98]"
+                  >
+                    Sounds good → Continue
+                  </button>
+                  <button
+                    onClick={handleBack}
+                    className="text-sm text-violet-600 hover:text-violet-700 hover:underline transition-colors"
+                  >
+                    This doesn&apos;t feel right
+                  </button>
+                  <p className="text-xs text-gray-400">
+                    You can adjust this later. Nothing is locked in.
+                  </p>
                 </div>
               </div>
-            </FadeInSection>
-          )}
+            </div>
+          </FadeInSection>
 
           {/* ========== FALLBACK: No GPT analysis ========== */}
           {!hasAnalysis && basic && (
             <FadeInSection delay={200} show>
-              <div className="px-6 sm:px-8 py-5 border-t border-gray-100 space-y-2.5">
+              <div className="px-4 sm:px-5 py-3 border-t border-gray-100 space-y-2.5">
                 {basic.full_name && (
                   <FactRow label="Name" value={basic.full_name} />
                 )}
@@ -721,34 +714,6 @@ export default function ProfileAnalysisClient({
               </div>
             </FadeInSection>
           )}
-
-          {/* ========== E) ACTION FOOTER ========== */}
-          <FadeInSection delay={hasAnalysis ? 800 : 400} show>
-            <div className="px-6 sm:px-8 py-6 border-t border-gray-100">
-              <div className="flex flex-col items-end gap-3">
-                {/* Primary CTA */}
-                <button
-                  onClick={handleContinue}
-                  className="px-6 py-3 text-sm font-semibold text-gray-900 bg-primary-500 hover:bg-primary-600 rounded-xl transition-all duration-200 shadow-[var(--shadow-button)] hover:shadow-md active:scale-[0.98]"
-                >
-                  Sounds good → Continue
-                </button>
-
-                {/* Secondary link */}
-                <button
-                  onClick={handleBack}
-                  className="text-sm text-violet-600 hover:text-violet-700 hover:underline transition-colors"
-                >
-                  This doesn&apos;t feel right
-                </button>
-
-                {/* Hint */}
-                <p className="text-xs text-gray-400">
-                  You can adjust this later. Nothing is locked in.
-                </p>
-              </div>
-            </div>
-          </FadeInSection>
         </div>
       )}
     </ChatLayout>

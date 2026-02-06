@@ -793,7 +793,7 @@ function ChatPageContent() {
       <ChatLayout
         currentStep={1}
         totalSteps={6}
-        stepTitle="Profile analysis"
+        showNav
       >
         {/* Nova sesija button */}
         <div className="flex justify-end mb-4">

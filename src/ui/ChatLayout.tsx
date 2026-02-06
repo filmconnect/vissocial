@@ -1,8 +1,7 @@
 // ============================================================
 // CHAT LAYOUT
 // ============================================================
-// Vissocial - Chat interface layout with header, navigation,
-// and step indicator
+// Vissocial - Chat interface layout with header and step indicator
 // ============================================================
 
 "use client";
@@ -32,17 +31,6 @@ function ChevronDownIcon({ className = "w-4 h-4" }: { className?: string }) {
 }
 
 // ============================================================
-// Navigation Items
-// ============================================================
-
-const NAV_ITEMS = [
-  { href: "/chat", label: "Chat" },
-  { href: "/calendar", label: "Calendar" },
-  { href: "/profile", label: "Profile" },
-  { href: "/settings", label: "Settings" },
-] as const;
-
-// ============================================================
 // Brand Logo
 // ============================================================
 
@@ -62,23 +50,38 @@ function BrandLogo({ showText = true }: { showText?: boolean }) {
 }
 
 // ============================================================
-// Navigation Link
+// Navigation Links
 // ============================================================
 
-function NavLink({ href, label, isActive }: { href: string; label: string; isActive: boolean }) {
+const NAV_LINKS = [
+  { href: "/chat", label: "Chat" },
+  { href: "/calendar", label: "Calendar" },
+  { href: "/profile", label: "Profile" },
+  { href: "/settings", label: "Settings" },
+];
+
+function NavLinks() {
+  const pathname = usePathname();
+
   return (
-    <Link
-      href={href}
-      className={`
-        relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-200
-        ${isActive
-          ? "text-gray-900 bg-white/60 shadow-sm"
-          : "text-gray-500 hover:text-gray-700 hover:bg-white/30"
-        }
-      `}
-    >
-      {label}
-    </Link>
+    <nav className="hidden sm:flex items-center gap-6">
+      {NAV_LINKS.map(({ href, label }) => {
+        const isActive = pathname === href || pathname?.startsWith(href + "/");
+        return (
+          <Link
+            key={href}
+            href={href}
+            className={`text-sm font-medium transition-colors ${
+              isActive
+                ? "text-gray-900"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -99,67 +102,36 @@ export function ChatHeader({
   totalSteps = 6,
   stepTitle,
   showSteps = true,
-  showNav = true,
+  showNav = false,
 }: ChatHeaderProps) {
-  const pathname = usePathname();
-
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-lavender-100/95 backdrop-blur-md border-b border-lavender-200/50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-16">
-          {/* Left: Logo */}
-          <Link href="/" className="flex-shrink-0">
+          {/* Logo */}
+          <Link href="/">
             <BrandLogo />
           </Link>
 
-          {/* Center: Navigation — ALWAYS visible on desktop */}
-          {showNav && (
-            <nav className="hidden sm:flex items-center gap-1">
-              {NAV_ITEMS.map((item) => (
-                <NavLink
-                  key={item.href}
-                  href={item.href}
-                  label={item.label}
-                  isActive={pathname === item.href}
-                />
-              ))}
-            </nav>
+          {/* Navigation OR Step Title in center */}
+          {showNav ? (
+            <NavLinks />
+          ) : stepTitle ? (
+            <div className="absolute left-1/2 transform -translate-x-1/2">
+              <span className="text-sm font-medium text-gray-700">
+                {stepTitle}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Step Indicator (right) */}
+          {showSteps && (
+            <button className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+              <span>Step {currentStep} of {totalSteps}</span>
+              <ChevronDownIcon className="w-4 h-4" />
+            </button>
           )}
-
-          {/* Right: Step Title + Step Indicator */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            {stepTitle && (
-              <>
-                <span className="hidden md:inline text-sm font-medium text-gray-600">
-                  {stepTitle}
-                </span>
-                {showSteps && (
-                  <span className="hidden md:inline text-gray-300">|</span>
-                )}
-              </>
-            )}
-            {showSteps && (
-              <button className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors">
-                <span>Step {currentStep} of {totalSteps}</span>
-                <ChevronDownIcon className="w-4 h-4" />
-              </button>
-            )}
-          </div>
         </div>
-
-        {/* Mobile Navigation (second row, below main header) */}
-        {showNav && (
-          <nav className="sm:hidden flex items-center gap-1 pb-2 -mt-1 overflow-x-auto">
-            {NAV_ITEMS.map((item) => (
-              <NavLink
-                key={item.href}
-                href={item.href}
-                label={item.label}
-                isActive={pathname === item.href}
-              />
-            ))}
-          </nav>
-        )}
       </div>
     </header>
   );
@@ -184,7 +156,7 @@ export function ChatLayout({
   totalSteps = 6,
   stepTitle,
   showSteps = true,
-  showNav = true,
+  showNav = false,
 }: ChatLayoutProps) {
   return (
     <div className="min-h-screen bg-gradient-lavender">
@@ -197,8 +169,8 @@ export function ChatLayout({
         showNav={showNav}
       />
 
-      {/* Main Content — extra top padding on mobile for nav row */}
-      <main className="pt-24 sm:pt-20 pb-32 px-4">
+      {/* Main Content */}
+      <main className="pt-16 pb-32 px-4">
         <div className="max-w-3xl mx-auto">
           {children}
         </div>
