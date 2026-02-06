@@ -515,7 +515,7 @@ Return ONLY valid JSON with this exact structure:
         max_tokens: 2000,
         temperature: 0.4,
       }),
-      signal: AbortSignal.timeout(10000), // 10s timeout for GPT
+      signal: AbortSignal.timeout(30000), // 30s timeout for GPT (increased from 10s — cold start fix)
     });
 
     if (!response.ok) {

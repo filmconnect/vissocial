@@ -56,7 +56,7 @@ interface ErrorState {
 // CONSTANTS
 // ============================================================
 
-const TIMEOUT_MS = 20_000;
+const TIMEOUT_MS = 45_000; // FIX: was 20_000 — too short for GPT cold start
 
 const ERROR_CONFIG: Record<ErrorType, {
   icon: React.ReactNode;
@@ -393,9 +393,9 @@ export default function ProfileAnalysisClient({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Timeout timer
+    // Timeout timer — pass reason so we can distinguish from cleanup abort
     const timeoutId = setTimeout(() => {
-      controller.abort();
+      controller.abort("timeout");
     }, TIMEOUT_MS);
 
     try {
@@ -450,7 +450,13 @@ export default function ProfileAnalysisClient({
       clearTimeout(timeoutId);
 
       if (err instanceof DOMException && err.name === "AbortError") {
-        setError({ type: "timeout", message: "Request timed out" });
+        // Only show timeout if it was actually from the timer, not from StrictMode cleanup
+        if (controller.signal.reason === "timeout") {
+          setError({ type: "timeout", message: "Request timed out" });
+          setLoading(false);
+        }
+        // If aborted by cleanup (no reason), silently ignore — new mount will retry
+        return;
       } else if (
         err instanceof TypeError &&
         (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Failed"))
