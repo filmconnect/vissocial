@@ -17,9 +17,12 @@
 //   9. normalizeMessages: +metadata field
 //
 // Functional additions:
-//   10. from=analyze: auto-send handle when coming from /analyze page
+//   10. from=analyze: show context info (no auto-send)
 //   11. Legacy ?analyze=X backward compat
 //   12. Notifications: graceful handling of 500 errors (missing column)
+//
+// UPDATED: Removed auto-send "Brzi pregled" — analyze context is
+//          shown as informational message only, user chooses next step.
 // ============================================================
 
 "use client";
@@ -269,6 +272,8 @@ function ChatPageContent() {
 
   // Ref to hold handle from analyze flow
   const fromAnalyzeRef = useRef<string | null>(null);
+  // Ref to hold full analyze result data
+  const analyzeDataRef = useRef<any>(null);
 
   // ============================================================
   // Scroll to bottom on new messages
@@ -297,6 +302,7 @@ function ChatPageContent() {
             || "";
           if (analyzeHandle) {
             fromAnalyzeRef.current = analyzeHandle;
+            analyzeDataRef.current = result;
           }
         }
       } catch (e) {
@@ -336,50 +342,47 @@ function ChatPageContent() {
   }, []);
 
   // ============================================================
-  // Auto-send handle message when session is ready after analyze
-  // Uses direct API call instead of sendMessage to avoid stale closure
+  // Show analyze context as informational message (NO auto-send)
+  // When coming from /analyze, we inject a local context message
+  // so the user sees their analyzed profile, then chooses next step.
   // ============================================================
   useEffect(() => {
     if (!sessionId || !fromAnalyzeRef.current) return;
 
     const handle = fromAnalyzeRef.current;
+    const data = analyzeDataRef.current;
     fromAnalyzeRef.current = null; // Clear so it doesn't fire again
+    analyzeDataRef.current = null;
 
-    const text = `Brzi pregled: @${handle}`;
+    // Build informational message from analyze data
+    let infoText = `📊 Analiza profila **@${handle}** je završena.\n\n`;
 
-    (async () => {
-      const userMsg: Msg = {
-        id: "temp_analyze_" + Date.now(),
-        role: "user",
-        text,
-      };
-      setMsgs((prev) => [...prev, userMsg]);
-      setBusy(true);
+    if (data?.basic) {
+      const b = data.basic;
+      if (b.full_name) infoText += `👤 ${b.full_name}\n`;
+      if (b.followers_count) infoText += `👥 Pratitelji: ${b.followers_count.toLocaleString()}\n`;
+      if (b.media_count) infoText += `📸 Objava: ${b.media_count.toLocaleString()}\n`;
+      if (b.biography) infoText += `📝 ${b.biography}\n`;
+      infoText += `\n`;
+    }
 
-      try {
-        const res = await fetch("/api/chat/message", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, text }),
-        });
+    infoText += `Kako želiš nastaviti?`;
 
-        const data = await res.json();
+    const contextMsg: Msg = {
+      id: "msg_analyze_context_" + Date.now(),
+      role: "assistant",
+      text: infoText,
+      chips: [
+        { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+        { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
+      ]
+    };
 
-        if (data.new_messages) {
-          setMsgs((prev) => {
-            const withoutTemp = prev.filter((m) => m.id !== userMsg.id);
-            const normalized = normalizeMessages(data.new_messages);
-            const existingIds = new Set(withoutTemp.map((m) => m.id));
-            const newMsgs = normalized.filter((m) => !existingIds.has(m.id));
-            return [...withoutTemp, userMsg, ...newMsgs];
-          });
-        }
-      } catch (err) {
-        console.error("Auto-send analyze handle failed:", err);
-      }
-
-      setBusy(false);
-    })();
+    // Replace the welcome message (from createSession) with context message
+    setMsgs(prev => {
+      const withoutWelcome = prev.filter(m => m.role !== "assistant");
+      return [...withoutWelcome, contextMsg];
+    });
   }, [sessionId]);
 
   // ============================================================

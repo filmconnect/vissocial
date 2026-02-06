@@ -6,6 +6,7 @@
 // - Briše proizvode
 // - Briše stare sesije
 // - Kreira novu sesiju
+// UPDATED: Maknuta opcija "Brzi pregled" - samo Spoji IG + Nastavi bez
 // ============================================================
 
 import { NextResponse } from "next/server";
@@ -61,12 +62,10 @@ export async function POST() {
 
 Kako želiš započeti?
 
-1. **Brzi pregled** - upiši Instagram username (npr. @mojbrand) i dobij brzu analizu profila
-2. **Spoji Instagram** - povezivanje za punu funkcionalnost
-3. **Nastavi bez Instagrama** - ručni upload slika`;
+1. **Spoji Instagram** - povezivanje za punu funkcionalnost
+2. **Nastavi bez Instagrama** - ručni upload slika`;
 
     const chips = [
-      { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
       { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
       { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
     ];

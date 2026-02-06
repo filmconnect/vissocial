@@ -7,6 +7,7 @@
 // - "Bez Instagrama" → web scraping + manual upload + website URL
 // - Enhanced scraping with web search fallback + website scraping
 // - Progress tracking for onboarding
+// UPDATED: Maknuta opcija "Brzi pregled" iz init stepa
 // ============================================================
 
 import { NextResponse } from "next/server";
@@ -1086,23 +1087,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ new_messages: [a] });
     }
 
-    // Brzi pregled
-    if (norm.includes("brzi") || norm.includes("pregled") || norm.includes("analiz")) {
-      await q(
-        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
-        [JSON.stringify({ ...state, step: "scrape_input" }), session_id]
-      );
-
-      const a = await pushMessage(
-        session_id,
-        "assistant",
-        "Unesi Instagram username ili URL profila.\n\nPrimjeri: @mojbrand, instagram.com/mojbrand",
-        { chips: [] }
-      );
-
-      return NextResponse.json({ new_messages: [a] });
-    }
-
     // Spoji Instagram
     if (norm.includes("spoji") || norm.includes("connect")) {
       if (ig_connected) {
@@ -1145,10 +1129,9 @@ export async function POST(req: Request) {
       const a = await pushMessage(
         session_id,
         "assistant",
-        "Ok! Bez Instagrama možeš:\n\n1. **Brzi pregled** - analiziraj bilo koji javni profil\n2. **Web stranica** - unesi URL stranice za analizu firme\n3. **Uploaj slike** - ručni upload referentnih slika",
+        "Ok! Bez Instagrama možeš:\n\n1. **Web stranica** - unesi URL stranice za analizu firme\n2. **Uploaj slike** - ručni upload referentnih slika",
         {
           chips: [
-            { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
             { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" },
             { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" }
           ]
@@ -1164,14 +1147,13 @@ export async function POST(req: Request) {
       return handleScraping(session_id, state, username, ig_connected);
     }
 
-    // Default
+    // Default — only 2 options, no "Brzi pregled"
     const a = await pushMessage(
       session_id,
       "assistant",
       "Odaberi kako želiš započeti:",
       {
         chips: [
-          { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
           { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
           { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
         ]
@@ -1185,29 +1167,13 @@ export async function POST(req: Request) {
   // STEP: NO INSTAGRAM OPTIONS
   // =========================
   if (step === "no_instagram_options") {
-    if (norm.includes("brzi") || norm.includes("pregled")) {
-      await q(
-        `UPDATE chat_sessions SET state=$1 WHERE id=$2`,
-        [JSON.stringify({ ...state, step: "scrape_input" }), session_id]
-      );
-
-      const a = await pushMessage(
-        session_id,
-        "assistant",
-        "Unesi Instagram username ili URL profila za analizu:",
-        { chips: [] }
-      );
-
-      return NextResponse.json({ new_messages: [a] });
-    }
-
+    // Default — web stranica + uploaj slike (no "Brzi pregled")
     const a = await pushMessage(
       session_id,
       "assistant",
       "Odaberi opciju:",
       {
         chips: [
-          { type: "suggestion", label: "Brzi pregled profila", value: "brzi pregled" },
           { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" },
           { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" }
         ]
@@ -1412,13 +1378,10 @@ async function handleScraping(
       if (!ig_connected) {
         chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
       }
-
-      chips.push({ type: "suggestion", label: "Pokušaj drugi profil", value: "brzi pregled" });
     }
   } else {
     responseText = `Nisam uspio dohvatiti podatke za @${username}.\n\nProfil je možda privatan ili ne postoji.`;
     chips = [
-      { type: "suggestion", label: "Pokušaj drugi profil", value: "brzi pregled" },
       { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" }
     ];
 

@@ -3,6 +3,7 @@
 // ============================================================
 // Kreira ili učitava chat session.
 // UPDATED: Dodana podrška za Step 0 (init) state.
+// UPDATED: Maknuta opcija "Brzi pregled" - samo Spoji IG + Nastavi bez
 // ============================================================
 
 import { NextResponse } from "next/server";
@@ -52,7 +53,7 @@ export async function POST() {
     // Initial message depends on state
     const m1 = "msg_" + uuid();
     let welcomeText: string;
-    let chips: string[];
+    let chips: any[];
 
     if (initialStep === "init") {
       // Step 0: Pre-OAuth, offer options
@@ -60,14 +61,12 @@ export async function POST() {
 
 Kako želiš započeti?
 
-1. **Brzi pregled** - upiši Instagram username (npr. @mojbrand) i dobij brzu analizu profila
-2. **Spoji Instagram** - povezivanje za punu funkcionalnost
-3. **Nastavi bez Instagrama** - ručni upload slika`;
+1. **Spoji Instagram** - povezivanje za punu funkcionalnost
+2. **Nastavi bez Instagrama** - ručni upload slika`;
 
       chips = [
-        "Brzi pregled profila",
-        "Spoji Instagram",
-        "Nastavi bez Instagrama"
+        { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+        { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
       ];
     } else {
       // Post-OAuth welcome
@@ -76,10 +75,10 @@ Kako želiš započeti?
 Reci mi cilj tvog profila za idući mjesec, pa krećemo s planom.`;
 
       chips = [
-        "Više engagementa",
-        "Izgradnja brenda",
-        "Promocija proizvoda",
-        "Mix svega"
+        { type: "onboarding_option", label: "Više engagementa", value: "cilj: engagement" },
+        { type: "onboarding_option", label: "Izgradnja brenda", value: "cilj: branding" },
+        { type: "onboarding_option", label: "Promocija proizvoda", value: "cilj: promotion" },
+        { type: "onboarding_option", label: "Mix svega", value: "cilj: mix" }
       ];
     }
 
