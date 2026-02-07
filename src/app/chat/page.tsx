@@ -47,6 +47,7 @@ type Chip = string | {
   assetId?: string;
   uploadType?: string;
   accept?: string;
+  confirmed?: boolean;
 };
 
 type Msg = {
@@ -501,6 +502,7 @@ function ChatPageContent() {
           assetId: chip.assetId,
           uploadType: chip.uploadType,
           accept: chip.accept,
+          confirmed: chip.confirmed,
         } as ChatChipData;
       }),
     };
@@ -555,11 +557,22 @@ function ChatPageContent() {
       setBusy(true);
       try {
         const endpoint = chip.action === "reject" ? "/api/products/reject" : "/api/products/confirm";
-        await fetch(endpoint, {
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ product_id: chip.productId })
         });
+        if (res.ok) {
+          // Mark chip as confirmed/rejected in msgs state for visual feedback
+          setMsgs(prev => prev.map(m => ({
+            ...m,
+            chips: m.chips?.map(c =>
+              typeof c !== "string" && c.productId === chip.productId
+                ? { ...c, confirmed: true }
+                : c
+            )
+          })));
+        }
       } catch (e) {
         console.error("Product action failed:", e);
       }
