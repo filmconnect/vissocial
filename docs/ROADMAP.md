@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Zadnje ažuriranje:** 7. veljače 2026
+
 ## ✅ Completed
 
 ### Phase 0: Foundation
@@ -22,27 +24,52 @@
 - [x] Multi-reference support
 - [x] Calendar/editor UI
 
-### Phase 3: Chat UX (Partial)
+### Phase 3: Chat UX
 - [x] Async notifications system
 - [x] chat_notifications table
 - [x] Frontend polling (5s)
 - [x] Worker lockDuration fix
-- [ ] ChatChip icons (plus → check)
-- [ ] planGenerate bug fix
+- [x] ChatChip icons (☐ before, ✅ after) — V7
+- [x] Product confirm vizualni feedback — V7
+- [x] Init step simplifikacija (2 opcije) — V7
+
+### Phase 3.5: Design System Migration (V3 — NOVO)
+- [x] Design tokens (boje, fontovi, spacing)
+- [x] UI komponente (ChatBubble, ChatLayout, Button, Card, Chip, Avatar, Icons, Input)
+- [x] Lavender gradient pozadina
+- [x] AI avatar (sparkle, NE robot)
+- [x] Contently-style landing page
+- [x] Dvoslojna navigacija (ChatLayout + AppHeader)
+- [x] Tailwind custom classes i boje
+
+### Phase 3.6: Profile Analysis (V3 — NOVO)
+- [x] /analyze/[handle] stranica
+- [x] POST /api/analyze endpoint (scrape + GPT-4o-mini)
+- [x] Progressive loading (skeleton states)
+- [x] Error handling (timeout, network, not_found)
+- [x] from=analyze → /chat integration
+- [x] localStorage bridge za kontekst passing
+
+### Phase 3.7: Database & Storage Fixes (V7)
+- [x] assets.external_id kolona (duplicate detection)
+- [x] detected_products.analysis_id + source kolone
+- [x] Vercel Blob allowOverwrite: true (re-ingest fix)
+- [x] End-to-end pipeline verificiran
 
 ## 🚧 In Progress
 
-### Phase 3: Chat UX (Continued)
-- [ ] Fix planGenerate arm_id bug
-- [ ] ChatChip icon states (➕ before, ✅ after)
-- [ ] Instagram scraping without OAuth
-- [ ] Post-OAuth chat notification
+### Phase 4: Polish & Cleanup
+- [ ] Error handling poboljšanja na svim stranicama
+- [ ] Toast notifikacije za upload success/error
+- [ ] Step indicator dinamičko ažuriranje
+- [ ] Cleanup: obrisati Card.tsx, Badge.tsx ako se ne koriste
+- [ ] Cleanup: obrisati ChipButton iz page.tsx
 
-### Phase 4: Web Scraping
-- [ ] Public Instagram profile scraping
-- [ ] Company website scraping
-- [ ] Quick brand analysis without OAuth
-- [ ] Product catalog extraction
+### Phase 4.5: Profile Screen Enhancement
+- [ ] /profile stranica s brand editing
+- [ ] Visual style editing
+- [ ] Product management (add/remove/edit)
+- [ ] Brand consistency metrics prikaz
 
 ## 📋 Planned
 
@@ -50,7 +77,7 @@
 - [ ] Real posting scheduler UI
 - [ ] Queue status dashboard
 - [ ] Retry failed posts
-- [ ] S3 signed URLs for export
+- [ ] S3 signed URLs za export
 
 ### Phase 6: Multi-platform
 - [ ] Platform abstraction layer
@@ -72,15 +99,37 @@
 
 ## Known Issues
 
-### Critical
-1. **planGenerate.ts:53** - `column "arm_id" does not exist`
-   - Table has `id, params` not `arm_id, arm_params`
-   - All references need updating
+### Resolved (V7)
+- ~~planGenerate.ts column error~~ → Fixed (arm_id → id)
+- ~~ChatChip icons~~ → Fixed (☐ before, ✅ after)
+- ~~Product confirm no feedback~~ → Fixed (zeleni chip)
+- ~~Vercel Blob re-ingest~~ → Fixed (allowOverwrite)
+- ~~assets.external_id missing~~ → Fixed (ALTER TABLE)
+- ~~detected_products.analysis_id missing~~ → Fixed (ALTER TABLE)
 
-### Medium
-2. **ChatChip icons** - Shows ✅ before and after confirmation
-   - Should show ➕ before, ✅ after
+### Open — Medium
+1. **Notifications table** — `column "title" does not exist` na nekim upitima
+   - Database schema mismatch, treba ALTER TABLE
 
-### Low
-3. **Post-OAuth message** - No chat message after Instagram OAuth
-   - May be localStorage issue
+### Open — Low
+1. **Badge komponenta** — ne postoji u novom design sistemu
+   - Stranice koje koriste Badge trebaju migraciju na inline span
+2. **scrape_input/scrape_complete stepovi** — postoje u kodu ali se ne nude iz init-a
+   - Kandidat za cleanup u budućoj sesiji
+
+## Branch Strategy
+
+| Branch | Status | Opis |
+|--------|--------|------|
+| `main` | Stabilno | Production-ready kod |
+| `develop` | Development | Integration branch |
+| `feature/design_initial` | **Aktivni** | V3 Design System + V7 Fixes |
+
+## Version History
+
+| Version | Datum | Highlights |
+|---------|-------|------------|
+| V1 | Jan 2026 | Foundation, Instagram OAuth, Vision |
+| V2 | Jan 2026 | Content generation, Calendar, Notifications |
+| V3 | Feb 2026 | Design system migration, Profile Analysis |
+| V7 Fixes | Feb 2026 | Database fixes, Product confirm UI, Pipeline verification |

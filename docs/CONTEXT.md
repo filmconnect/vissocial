@@ -2,7 +2,8 @@
 
 > **NAPOMENA:** Ovaj dokument služi kao autoritativni izvor znanja o Vissocial projektu. U slučaju proturječja s project knowledge ili drugim izvorima, **ovaj dokument ima prioritet**.
 > 
-> **Verzija:** 2.0 (Ažurirano: Veljača 2026)
+> **Verzija:** 3.0 (Ažurirano: 7. veljače 2026)
+> **Branch:** `feature/design_initial` (aktivni development)
 > **GitHub:** Projekt je spojen s GitHub repozitorijem - kod se redovito sync-a
 
 ---
@@ -15,10 +16,11 @@
 - **Frontend:** Next.js 14, TypeScript, Tailwind CSS
 - **Backend:** Next.js API Routes, BullMQ background workers
 - **Database:** PostgreSQL
-- **Storage:** MinIO (S3-compatible) na portu **9100**
+- **Storage:** MinIO (S3-compatible, port **9100**) / Vercel Blob (production)
 - **Queue:** BullMQ + Redis na portu **6380** (NE 6379!)
 - **AI:** 
   - GPT-4 Vision za analizu slika
+  - GPT-4o-mini za brand analizu (/api/analyze)
   - ChatGPT za generiranje sadržaja
   - fal.ai (Flux2) za generiranje slika
 - **Project ID:** `proj_local` (hardkodirano za development)
@@ -28,651 +30,523 @@
 C:\Users\Velo\source\vissocial_chat\vissocial_app\
 ```
 
+### 1.3 Design System (V2 — Contently stil)
+- **Boje:** Primary (žuta #FFCA28), Secondary (lavender #F8F7FF)
+- **Font:** Inter (Google Fonts)
+- **Avatar:** Sparkle/star gradient (NE robot)
+- **Komponente:** `src/ui/` folder (ChatBubble, ChatLayout, Button, Card, Chip, Avatar, Icons, Input)
+
 ---
 
-## 2. GLAVNI FLOW APLIKACIJE - ONBOARDING FSM
+## 2. GLAVNI FLOW APLIKACIJE
 
-### 2.1 FSM (Finite State Machine) - Trenutno stanje
-
-Chat koristi FSM za praćenje korisnika kroz onboarding. State se sprema u `chat_sessions.state` (JSONB).
+### 2.1 User Journey (6 koraka)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ONBOARDING FSM                               │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         VISSOCIAL USER FLOW                              │
+└─────────────────────────────────────────────────────────────────────────┘
 
-[INIT] ──► Korisnik otvara chat
-   │
-   ├──► "Spoji Instagram" ──► OAuth ──► [ONBOARDING]
-   │
-   ├──► "Brzi pregled" ──► [SCRAPE_INPUT] ──► username ──► [SCRAPE_COMPLETE]
-   │                                                              │
-   │                                                              ▼
-   ├──► "Nastavi bez IG" ──► [NO_INSTAGRAM_OPTIONS]          [ONBOARDING]
-   │                              │
-   │                              ├──► "Web stranica" ──► [WEBSITE_INPUT]
-   │                              │                            │
-   │                              │                            ▼ (scraping)
-   │                              │                        [ONBOARDING]
-   │                              │
-   │                              └──► "Uploaj slike" ──► [UPLOAD_REFERENCE]
-   │                                                            │
-   │                                                            ▼
-   │                                    ┌────────────────────────────────┐
-   │                                    │    UPLOAD TYPE SELECTION       │
-   │                                    ├────────────────────────────────┤
-   │                                    │ • "upload stil" → UPLOAD_STYLE │
-   │                                    │ • "upload proizvod" → UPLOAD_PRODUCT
-   │                                    │ • "upload lik" → UPLOAD_CHARACTER
-   │                                    │ • "preskoči" → ONBOARDING      │
-   │                                    └────────────────────────────────┘
-   │
-   └──► [ONBOARDING] ◄─────────────────────────────────────────────────┘
-              │
-              │   Progress: 📊 Napredak: X/5
-              │   ⬜/✅ Vizualna referenca
-              │   ⬜/✅ Cilj
-              │   ⬜/✅ Tip profila
-              │   ⬜/✅ Fokus
-              │   ⬜/✅ Proizvodi/reference
-              │
-              ├──► goal chips → state.goal = "branding|engagement|..."
-              ├──► profile_type chips → state.profile_type = "creator|lifestyle|..."
-              ├──► focus chips → state.focus = "storytelling|growth|..."
-              │
-              ▼
-   [READY_TO_GENERATE] ──► "generiraj plan sada" ──► [GENERATING]
-              │
-              ▼
-         [CALENDAR]
+[LANDING PAGE] ──► Korisnik unosi @handle
+        │
+        ▼
+[STEP 1: PROFILE ANALYSIS] (/analyze/[handle])
+        │   - GPT-4o-mini analizira profil
+        │   - Prikazuje: Company, Services, Tone, Audience, Language
+        │   - USP Analysis + Recommended Focus
+        │
+        ├──► "Sounds good → Continue" ──► /chat?from=analyze
+        │
+        ▼
+[STEP 2: CONNECT INSTAGRAM] (/chat)
+        │   - Init: 2 opcije (Spoji IG, Nastavi bez)
+        │   - OAuth flow ili manual input
+        │
+        ├──► OAuth success ──► Instagram Ingest ──► Vision Analysis
+        │
+        ▼
+[STEP 3: TAILOR 30-DAY PLAN] (/chat - onboarding)
+        │   - Goal chips (engagement, branding, promotion, mix)
+        │   - Profile type chips (product_brand, lifestyle, creator)
+        │   - Focus chips (engagement, growth, promotion, storytelling)
+        │
+        ▼
+[STEP 4: PRODUCT CONFIRMATION] (/chat)
+        │   - Notifikacija s detektiranim proizvodima
+        │   - Chip klik → confirm/reject → zelena kvačica
+        │
+        ▼
+[STEP 5: CONTENT GENERATION] (/chat)
+        │   - "Generiraj plan" → LLM + Flux2
+        │
+        ▼
+[STEP 6: CALENDAR] (/calendar)
+        │   - Pregled, edit, approve, schedule
 ```
 
-### 2.2 Step States
+### 2.2 FSM States
 
 | Step | Opis | Sljedeći koraci |
 |------|------|-----------------|
-| `init` | Početni ekran | spoji IG, brzi pregled, nastavi bez |
+| `init` | Početni ekran | spoji IG, nastavi bez |
 | `scrape_input` | Unos IG usernamea | scrape_complete |
-| `scrape_complete` | Rezultati scrapinga | onboarding, web stranica |
-| `no_instagram_options` | Opcije bez IG | brzi pregled, web stranica, uploaj |
-| `website_input` | Unos URL-a | onboarding (nakon scrapinga) |
+| `scrape_complete` | Rezultati scrapinga | onboarding |
+| `no_instagram_options` | Opcije bez IG | web stranica, uploaj |
+| `website_input` | Unos URL-a | onboarding |
 | `upload_reference` | Odabir tipa uploada | upload_style/product/character |
-| `upload_style_reference` | Upload stil slika | upload_reference, onboarding |
-| `upload_product_reference` | Upload proizvoda | upload_reference, onboarding |
-| `upload_character_reference` | Upload likova | upload_reference, onboarding |
 | `onboarding` | Onboarding pitanja | ready_to_generate |
 | `ready_to_generate` | Potvrda generiranja | generating |
-| `generating` | U tijeku | - |
+| `generating` | U tijeku | calendar |
 
-### 2.3 Onboarding Progress Tracking
+**NAPOMENA (V7):** "Brzi pregled profila" uklonjen iz init stepa. Korisnici koji žele preview idu kroz /analyze stranicu.
+
+### 2.3 Init Chips (V7 — samo 2 opcije)
 
 ```typescript
-interface OnboardingProgress {
-  ig_connected: boolean;
-  has_reference_image: boolean;   // assets s label = *_reference
-  has_products: boolean;          // detected_products count > 0
-  has_confirmed_products: boolean; // detected_products status = 'confirmed'
-  has_goal: boolean;              // state.goal postoji
-  has_profile_type: boolean;      // state.profile_type postoji
-  has_focus: boolean;             // state.focus postoji
-  analysis_complete: boolean;     // instagram_analyses count > 0
-}
-
-// Može generirati kad:
-const canGenerate = 
-  (has_reference_image || has_confirmed_products) && 
-  has_goal && 
-  has_profile_type && 
-  has_focus;
-```
-
-### 2.4 Onboarding Chips po koraku
-
-**Cilj (goal):**
-- "Više engagementa" → `cilj: engagement`
-- "Izgradnja brenda" → `cilj: branding`
-- "Promocija proizvoda" → `cilj: promotion`
-- "Mix svega" → `cilj: mix`
-
-**Tip profila (profile_type):**
-- "🏷️ Product brand" → `profil: product_brand`
-- "🌿 Lifestyle" → `profil: lifestyle`
-- "👤 Creator" → `profil: creator`
-- "📄 Content/Media" → `profil: content_media`
-
-**Fokus (focus):**
-- "📈 Engagement" → `fokus: engagement`
-- "🚀 Rast" → `fokus: growth`
-- "🛒 Promocija" → `fokus: promotion`
-- "📖 Storytelling" → `fokus: storytelling`
-
----
-
-## 3. REFERENCE IMAGE SUSTAV (NOVO - FAZA 3.4)
-
-### 3.1 Tipovi referenci
-
-| Tip | Label u DB | Svrha | Max |
-|-----|-----------|-------|-----|
-| **Style Reference** | `style_reference` | Vizualni stil, mood, kompozicija | 5 |
-| **Product Reference** | `product_reference` | Slike proizvoda za AI | 5 |
-| **Character Reference** | `character_reference` | Osobe/maskote za konzistentnost | 5 |
-
-**Ukupni max:** 8 slika koristi se pri generiranju
-
-### 3.2 Upload Flow
-
-```
-[UPLOAD_REFERENCE] ──► Korisnik odabire tip
-        │
-        ├──► "🎨 Stil reference" ──► [UPLOAD_STYLE_REFERENCE]
-        │                                    │
-        │                                    ▼
-        │                           Prikaži file_upload chip
-        │                           Korisnik uploada sliku
-        │                           POST /api/assets/upload
-        │                                    │
-        │                                    ▼
-        │                           Sprema se u MinIO
-        │                           assets.label = 'style_reference'
-        │
-        ├──► "📦 Proizvodi" ──► [UPLOAD_PRODUCT_REFERENCE]
-        │
-        ├──► "👤 Likovi" ──► [UPLOAD_CHARACTER_REFERENCE]
-        │
-        └──► "Preskoči" ──► [ONBOARDING]
-```
-
-### 3.3 API Endpoints za Reference
-
-```
-POST /api/assets/upload
-  Body: FormData { file, label: 'style_reference'|'product_reference'|'character_reference' }
-  Returns: { id, url, label }
-
-GET /api/assets/references
-  Returns: { style_reference: [...], product_reference: [...], character_reference: [...] }
-
-DELETE /api/assets/[id]
-  Briše asset iz MinIO i DB
-```
-
-### 3.4 Database
-
-```sql
--- Reference slike su assets s određenim labelom
-assets (
-  id TEXT PRIMARY KEY,
-  project_id TEXT,
-  type TEXT,           -- 'image'
-  label TEXT,          -- 'style_reference', 'product_reference', 'character_reference'
-  url TEXT,
-  ...
-)
+// src/app/api/chat/session/route.ts
+chips: [
+  { type: "navigation", label: "Spoji Instagram", href: "/api/instagram/login" },
+  { type: "onboarding_option", label: "Nastavi bez Instagrama", value: "nastavi bez" }
+]
 ```
 
 ---
 
-## 4. WEB SCRAPING SUSTAV (IMPLEMENTIRANO)
+## 3. NAVIGACIJSKA ARHITEKTURA (V3 — Dvoslojna)
 
-### 4.1 Instagram Scraping (Brzi pregled)
+### 3.1 Pregled
 
-Korisnik može analizirati javni IG profil bez OAuth-a:
+| Ruta | Header | Izvor |
+|------|--------|-------|
+| `/` | Landing header (Pricing, Log in, Sign up) | page.tsx inline |
+| `/chat` | ChatLayout header (nav + step indicator) | ChatLayout.tsx |
+| `/analyze/[handle]` | ChatLayout header (nav + step indicator) | ChatLayout.tsx |
+| `/settings` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
+| `/profile` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
+| `/calendar` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
 
-```typescript
-// performScraping() u message/route.ts
-1. Fetch Instagram profile HTML
-2. Parse og:title, og:description meta tagove
-3. Extract: full_name, bio, followers, posts_count
-4. Fallback: estimateFromUsername() ako parsing ne uspije
-```
-
-**Rezultat:**
-```
-📊 **Profil @username**
-👤 Full Name
-👥 Pratitelji: 10.5K
-📸 Objava: 150
-📝 Bio text...
-
-Želiš li nastaviti s ovim profilom?
-[Da, nastavi] [Unesi web stranicu] [Spoji Instagram]
-```
-
-### 4.2 Website Scraping (NOVO)
-
-Korisnik može unijeti URL web stranice za analizu:
+### 3.2 ChatLayout.tsx — Za /chat i /analyze
 
 ```typescript
-// scrapeWebsite() u message/route.ts
-1. Fetch website HTML
-2. Extract:
-   - title (og:title ili <title>)
-   - description (og:description ili meta description)
-   - products/categories iz navigacije
-   - dominant colors iz CSS i theme-color meta
-```
-
-**Rezultat:**
-```
-✅ **Web stranica analizirana!**
-🌐 https://shop.example.hr/
-📌 Title
-📝 Description
-
-🏷️ Pronađeni proizvodi/kategorije:
-• Kategorija 1
-• Kategorija 2
-
-🎨 Dominantne boje: #ABC123, #DEF456
-```
-
-### 4.3 URL Parsing
-
-```typescript
-function extractWebsiteUrl(text: string): string | null {
-  // Prvo traži kompletan URL s protokolom
-  const fullUrlPattern = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/i;
-  
-  // Fallback: URL bez protokola
-  const simplePattern = /(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}/i;
-  
-  // Dodaje https:// ako nedostaje
+// src/ui/ChatLayout.tsx
+interface ChatLayoutProps {
+  children: React.ReactNode;
+  currentStep?: number;      // 1-6
+  totalSteps?: number;       // default 6
+  stepTitle?: string;        // "Profile analysis", "Connect Instagram"...
+  showSteps?: boolean;
+  onNewSession?: () => void; // "Nova sesija" button
 }
 ```
 
+**Sadrži:**
+- Fixed header sa Vissocial logom
+- NAV_ITEMS linkovi (Chat, Calendar, Profile, Settings)
+- Step indicator ("Step 1 of 6")
+- "Nova sesija" button (optional)
+- Lavender gradient pozadina
+
+### 3.3 AppHeader.tsx — Za ostale stranice
+
+```typescript
+// src/ui/AppHeader.tsx
+// Client component s usePathname() za active state
+// Vraća null na "/" i "/chat" (te stranice imaju svoj header)
+```
+
+**Stilovi:**
+- Background: `lavender-100/95` + `backdrop-blur-md`
+- Active link: `gray-900` text, `white/60` bg
+- Inactive: `gray-500` text → hover `gray-700`
+
+### 3.4 NAV_ITEMS (dijeljeno)
+
+```typescript
+const NAV_ITEMS = [
+  { label: "Chat", href: "/chat" },
+  { label: "Calendar", href: "/calendar" },
+  { label: "Profile", href: "/profile" },
+  { label: "Settings", href: "/settings" },
+];
+```
+
 ---
 
-## 5. PROFILE PAGE (FAZA 4.0 - IMPLEMENTIRANO)
+## 4. PROFILE ANALYSIS STRANICA (V3 — NOVO)
 
-### 5.1 Ruta i navigacija
-
-- **URL:** `/profile`
-- **Navigacija:** Dodan link u layout.tsx između Calendar i Settings
-
-### 5.2 Sekcije
-
-| Sekcija | Editable | Opis |
-|---------|----------|------|
-| Header | - | Naslov, Save button, IG badge |
-| Metadata Banner | - | Broj postova, verzija, timestamp, Rebuild button |
-| Visual Style | ✅ | Boje, photography styles, lighting, mood, composition |
-| Brand Consistency | ❌ | Color/style score, overall aesthetic |
-| Caption Patterns | ❌ | Dužina, ton, emoji, hashtags |
-| Products | ✅ | Lista proizvoda s lock/edit/delete |
-| Content Themes | ✅ | Tag chips s add/remove |
-| Reference Images | Preview | Thumbnails po tipu, link na chat |
-
-### 5.3 API Endpoints
+### 4.1 Arhitektura
 
 ```
-GET /api/profile
-  Returns: {
-    brand_profile: BrandProfile | null,
-    instagram_connected: boolean,
-    posts_analyzed: number,
-    pending_products: number,
-    confirmed_products: Product[],
-    references: { style_reference: N, product_reference: N, character_reference: N },
-    reference_images: { style_reference: [...], ... },
-    last_rebuild: string | null
+src/app/analyze/
+├── [handle]/
+│   ├── page.tsx                  ← Server component (metadata)
+│   └── ProfileAnalysisClient.tsx ← Client component (UI + API)
+```
+
+### 4.2 API Endpoint
+
+```
+POST /api/analyze
+  Body: { input: "@handle" | "https://url" | "Firma d.o.o." }
+  Response: {
+    success: boolean,
+    input_type: "instagram_handle" | "web_url" | "company_name",
+    basic: { handle, full_name, bio, followers, posts_count, profile_pic_url },
+    analysis: {
+      company, services, brand_tone, target_audience, language,
+      usp_analysis, recommended_focus, strengths[], opportunities[]
+    }
+  }
+  Timeout: 15s (GPT: 10s)
+```
+
+### 4.3 ProfileAnalysisClient States
+
+1. **Loading:** Skeleton animacije (HeaderSkeleton, QuickFactsSkeleton, USPSkeleton)
+2. **Error:** 4 tipa (timeout, network, not_found, generic) s retry buttonom
+3. **Success:** Progressive reveal s FadeInSection (staggered delays 200-800ms)
+
+### 4.4 Action Footer
+
+- **Primary:** "Sounds good → Continue" → `localStorage("analyze_result")` + `/chat?from=analyze`
+- **Secondary:** "This doesn't feel right" → `/`
+- **Hint:** "You can adjust this later. Nothing is locked in."
+
+### 4.5 /chat Integration (from=analyze)
+
+```typescript
+// src/app/chat/page.tsx
+useEffect(() => {
+  if (searchParams.get("from") === "analyze") {
+    const stored = localStorage.getItem("analyze_result");
+    // Parse stored data
+    // Create context message with profile info
+    // Replace welcome message (NE šalje na backend)
+    // Clear localStorage
+    router.replace("/chat");
+  }
+}, [searchParams]);
+```
+
+---
+
+## 5. DESIGN SYSTEM KOMPONENTE (V3)
+
+### 5.1 Folder struktura
+
+```
+src/ui/
+├── index.ts              ← Barrel export
+├── ChatBubble.tsx        ← Chat poruke, chipovi, avatari
+├── ChatLayout.tsx        ← Layout za chat stranice
+├── AppHeader.tsx         ← Navigacija za ostale stranice
+├── Button.tsx            ← Button varijante
+├── Card.tsx              ← Card wrapper
+├── Chip.tsx              ← Standalone chip
+├── Avatar.tsx            ← AI i User avatari
+├── Icons.tsx             ← SVG ikone
+└── Input.tsx             ← Input s label/error
+```
+
+### 5.2 ChatBubble.tsx — Ključne komponente
+
+```typescript
+// Tipovi
+interface ChatMessage {
+  id: string;
+  role: "assistant" | "user" | "system";
+  content: string;
+  chips?: ChatChipData[];
+  metadata?: { title, subtitle, fields[] };
+}
+
+interface ChatChipData {
+  type: "suggestion" | "onboarding_option" | "product_confirm" | 
+        "navigation" | "action" | "file_upload" | "asset_delete";
+  label: string;
+  value?: string;
+  recommended?: boolean;
+  href?: string;
+  productId?: string;
+  action?: "confirm" | "reject";
+  confirmed?: boolean;        // V7: za zelenu kvačicu
+  assetId?: string;
+  uploadType?: string;
+  accept?: string;
+}
+
+// Komponente
+export function ChatBubble({ message, onChipClick, ... })
+export function ActionButton({ label, onClick, variant, ... })
+export function ActionFooter({ primaryLabel, secondaryLabel, ... })
+```
+
+### 5.3 Design Tokens
+
+```css
+/* src/app/globals.css */
+:root {
+  --color-primary-500: #FFCA28;
+  --color-primary-600: #FFB300;
+  --color-lavender-100: #F8F7FF;
+  --color-lavender-200: #F4F3FF;
+  --shadow-card: 0 4px 20px -2px rgb(0 0 0 / 0.08);
+  --shadow-chat: 0 2px 8px -2px rgb(0 0 0 / 0.08);
+}
+```
+
+### 5.4 Tailwind Custom Classes
+
+```css
+.bg-gradient-lavender { background: linear-gradient(135deg, #f5f3ff, #ede9fe, #e9d5ff); }
+.shadow-chat { box-shadow: var(--shadow-chat); }
+.btn-primary { @apply bg-primary-500 hover:bg-primary-600 text-gray-900 font-semibold rounded-xl; }
+```
+
+---
+
+## 6. CHAT PAGE BRIDGE (page.tsx)
+
+### 6.1 Adapter Pattern
+
+```typescript
+// Konvertira interni Msg format → ChatMessage za ChatBubble
+function toDesignMessage(m: Msg): ChatMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.text,
+    metadata: m.metadata,
+    chips: m.chips?.map(chip => {
+      if (typeof chip === "string") {
+        return { type: "suggestion", label: chip, value: chip };
+      }
+      return {
+        type: chip.type || "suggestion",
+        label: chip.label,
+        value: chip.value || chip.label,
+        confirmed: chip.confirmed,  // V7
+        // ... ostali props
+      };
+    }),
+  };
+}
+```
+
+### 6.2 handleSmartChipClick — Special Chips
+
+```typescript
+// ChatBubble šalje samo value, ali trebamo full chip za:
+async function handleSmartChipClick(value: string, msgId: string) {
+  const msg = msgs.find(m => m.id === msgId);
+  const chip = msg?.chips?.find(c => ...);
+
+  // product_confirm → API + vizualni feedback
+  if (chip.type === "product_confirm") {
+    await fetch("/api/products/confirm", ...);
+    setMsgs(prev => /* update chip.confirmed = true */);
+    return; // NE šalje chat poruku!
   }
 
-PATCH /api/profile
-  Body: { profile: BrandProfile }
-  Ažurira brand_profiles.profile
+  // navigation → router.push
+  if (chip.type === "navigation" && chip.href) {
+    router.push(chip.href);
+    return;
+  }
 
-POST /api/profile/rebuild
-  Pokreće brandRebuild worker job
+  // file_upload → hidden input click
+  // asset_delete → confirm + API
 
-PATCH /api/products/[id]
-  Body: { name?, category?, locked? }
-  Ažurira proizvod
-
-DELETE /api/products/[id]
-  Briše proizvod
+  // Default: šalje kao chat poruku
+  handleChipAction(value);
+}
 ```
 
-### 5.4 Locked Products
-
-Kada je `product.locked = true`:
-- brandRebuild processor ga NE modificira
-- UI prikazuje 🔒 ikonu
-- Korisnik može unlock-ati
-
-### 5.5 Null Safety
-
-Profile page ima defensive coding za sve sekcije:
+### 6.3 Product Confirm Vizualni Feedback (V7)
 
 ```typescript
-const meta = profile._metadata || {
-  confidence_level: "auto",
-  based_on_posts: 0,
-  last_manual_override: null,
-  auto_generated_at: new Date().toISOString(),
-  version: 1
-};
+// Prije: ☐ Product Name — bijeli chip
+// Poslije: ✅ Product Name — zeleni chip s kvačicom
 
-const visualStyle = profile.visual_style || {
-  dominant_colors: [],
-  photography_styles: [],
-  lighting_preferences: [],
-  mood: "professional",
-  composition_patterns: []
-};
-
-// itd. za brand_consistency, caption_patterns, content_themes
-```
-
-### 5.6 UI Komponente
-
-```
-src/ui/ColorPicker.tsx   - Odabir boja s hex inputom
-src/ui/MultiSelect.tsx   - Multi-select s chipovima
-src/ui/ProgressBar.tsx   - Progress bar za scores
-src/ui/ProductCard.tsx   - Kartica proizvoda s akcijama
+// U Chip komponenti (ChatBubble.tsx):
+const isConfirmed = chip.confirmed === true;
+// Confirmed stil: bg-green-50 text-green-700 border-green-400
 ```
 
 ---
 
-## 6. INSTAGRAM FLOW (IMPLEMENTIRANO)
+## 7. DATABASE SCHEMA (V3 — Ažurirano)
 
-### 6.1 OAuth Flow
-
-```
-[Settings] ──► "Connect Instagram" ──► /api/instagram/login
-                                            │
-                                            ▼
-                                    Meta OAuth Dialog
-                                            │
-                                            ▼
-                                    /api/instagram/callback
-                                            │
-                                            ├──► Exchange code for token
-                                            ├──► Get long-lived token (59 dana)
-                                            ├──► Find IG Business Account via Page
-                                            ├──► Update projects table
-                                            ├──► Queue instagram.ingest job
-                                            │
-                                            ▼
-                                    Redirect to /chat?ig_connected=1
-```
-
-### 6.2 Post-OAuth u Chatu
-
-Kada korisnik dođe iz OAuth-a, chat prepoznaje query param i šalje poruku:
-```
-✅ Super! Instagram je uspješno povezan! 🎉
-Pokrećem analizu tvojih objava u pozadini...
-
-📊 Napredak: 1/5
-✅ Vizualna referenca
-⬜ Cilj
-...
-
-U međuvremenu, reci mi cilj tvog profila za idući mjesec:
-[Engagement] [Branding] [Promocija] [Mix]
-```
-
----
-
-## 7. NOTIFIKACIJE SUSTAV (IMPLEMENTIRANO)
-
-### 7.1 Arhitektura
-
-```
-[Worker] → pushNotification() → [chat_notifications table]
-                                        ↓
-[Frontend] ← polling (5s) ← [GET /api/chat/notifications]
-                                        ↓
-                              [Prikaz u chatu]
-```
-
-### 7.2 Tablica
+### 7.1 Glavne tablice
 
 ```sql
-CREATE TABLE chat_notifications (
-  id TEXT PRIMARY KEY,
-  session_id TEXT REFERENCES chat_sessions(id),
-  project_id TEXT REFERENCES projects(id),
-  type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  message TEXT NOT NULL,
-  data JSONB,
-  chips JSONB,
-  read BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-### 7.3 Korištenje
-
-```typescript
-import { notify } from "@/lib/notifications";
-
-await notify.analysisComplete(project_id, { posts_analyzed, products_found, dominant_color });
-await notify.planGenerated(project_id, itemCount, month);
-await notify.jobFailed(project_id, jobName, error);
-```
-
----
-
-## 8. DATABASE SCHEMA
-
-### 8.1 Core
-
-```sql
+-- Projects
 projects (
   id TEXT PRIMARY KEY,
-  name TEXT,
-  ig_connected BOOLEAN DEFAULT false,
-  meta_access_token TEXT,        -- VAŽNO: NE ig_access_token!
-  ig_user_id TEXT,
+  meta_access_token TEXT,      -- Instagram OAuth token (NE ig_access_token!)
+  meta_user_id TEXT,
   ig_username TEXT,
-  website_url TEXT,
-  ...
+  created_at TIMESTAMPTZ
 )
 
-brand_profiles (
-  id TEXT PRIMARY KEY,
-  project_id TEXT UNIQUE,
-  profile JSONB,                 -- BrandProfile objekt
-  updated_at TIMESTAMPTZ
-)
-```
-
-### 8.2 Assets & Products
-
-```sql
+-- Assets (V7: dodana external_id)
 assets (
   id TEXT PRIMARY KEY,
   project_id TEXT,
-  type TEXT,                     -- 'image', 'video'
-  label TEXT,                    -- 'style_reference', 'product_reference', 'character_reference', NULL
+  type TEXT,                   -- 'image', 'video'
+  source TEXT,                 -- 'instagram', 'upload'
   url TEXT,
-  meta JSONB,
-  ...
+  label TEXT,                  -- 'style_reference', 'product_reference', 'character_reference'
+  metadata JSONB,
+  external_id TEXT,            -- V7: IG media ID za duplicate detection
+  created_at TIMESTAMPTZ
 )
 
+-- Detected Products (V7: dodane analysis_id, source)
 detected_products (
   id TEXT PRIMARY KEY,
   project_id TEXT,
   asset_id TEXT,
+  analysis_id TEXT,            -- V7: referenca na instagram_analyses.id
   product_name TEXT,
   category TEXT,
   visual_features JSONB,
   prominence TEXT,
   confidence NUMERIC,
   frequency INTEGER DEFAULT 1,
+  source TEXT DEFAULT 'instagram_vision',  -- V7
   status TEXT CHECK (status IN ('pending', 'confirmed', 'rejected')),
-  locked BOOLEAN DEFAULT false,
-  ...
+  UNIQUE(asset_id, product_name)
 )
-```
 
-### 8.3 Chat
-
-```sql
+-- Chat Sessions
 chat_sessions (
   id TEXT PRIMARY KEY,
   project_id TEXT,
-  state JSONB                    -- { step, goal, profile_type, focus, ... }
+  state JSONB,                 -- FSM state: { step, goal, profile_type, focus, ... }
+  created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
 )
 
+-- Chat Messages
 chat_messages (
   id TEXT PRIMARY KEY,
   session_id TEXT,
-  role TEXT,                     -- 'user', 'assistant'
+  role TEXT,
   text TEXT,
-  meta JSONB                     -- { chips: [...] }
+  meta JSONB,                  -- { chips: [...] }
+  created_at TIMESTAMPTZ
 )
 
-chat_notifications (...)         -- Vidi sekciju 7.2
+-- Brand Profiles
+brand_profiles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT UNIQUE,
+  visual_style JSONB,
+  content_themes JSONB,
+  caption_patterns JSONB,
+  brand_consistency JSONB,
+  updated_at TIMESTAMPTZ
+)
 ```
 
-### 8.4 Content & RL
+### 7.2 V7 Migracije
 
 ```sql
-bandit_arms (
-  id TEXT PRIMARY KEY,           -- VAŽNO: NE arm_id!
-  name TEXT,
-  params JSONB                   -- VAŽNO: NE arm_params!
-)
+-- Dodaj external_id za Instagram duplicate detection
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_external_id ON assets(external_id) WHERE external_id IS NOT NULL;
 
-content_items (
-  id TEXT PRIMARY KEY,
-  content_pack_id TEXT,
-  project_id TEXT,
-  day INTEGER,
-  format TEXT,
-  topic TEXT,
-  visual_brief JSONB,
-  caption JSONB,
-  status TEXT,
-  ...
-)
+-- Dodaj analysis_id i source za product tracking
+ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
+ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram_vision';
 ```
 
 ---
 
-## 9. WORKER ARHITEKTURA
+## 8. STORAGE SUSTAV (V3)
 
-### 9.1 Queues
-
-| Queue | Job | Timeout | Opis |
-|-------|-----|---------|------|
-| `q_ingest` | `instagram.ingest` | 60s | Povlači media s IG |
-| `q_analyze` | `analyze.instagram` | 90s | Vision API analiza |
-| `q_brand_rebuild` | `brand.rebuild` | 60s | Agregira brand profil |
-| `q_llm` | `plan.generate` | 120s | Generira content plan |
-| `q_render` | `render.flux` | 60s | fal.ai render |
-| `q_export` | `export.pack` | 60s | ZIP export |
-
-### 9.2 Worker Config
+### 8.1 Hybrid Storage
 
 ```typescript
-const baseWorkerConfig = {
-  connection: { url: config.redisUrl },
-  lockDuration: 60000,
-  stalledInterval: 30000,
-  maxStalledCount: 2
-};
-
-// Za LLM (spori API):
-{ lockDuration: 120000 }
-
-// Za Analyze:
-{ lockDuration: 90000, concurrency: 3 }
+// src/lib/storage.ts
+// Auto-detection putem BLOB_READ_WRITE_TOKEN env varijable:
+// - Vercel Blob (production): BLOB_READ_WRITE_TOKEN postoji
+// - MinIO/S3 (local dev): S3Client na portu 9100
 ```
 
----
-
-## 10. KLJUČNI BUGOVI I RJEŠENJA (POVIJEST)
-
-### V1 Fixes
-- ✅ `planGenerate.ts` column error (`arm_id` → `id`)
-- ✅ ChatChip icons (➕ prije, ✅ nakon potvrde)
-- ✅ BullMQ lockDuration (30s → 60s+)
-- ✅ Notification sustav implementiran
-- ✅ Duplicate messages fix
-- ✅ Infinite notifications fix
-- ✅ Curly quotes syntax error
-
-### V2 Fixes
-- ✅ Redirect to /profile (404) → navigacija dodana
-- ✅ Product confirmation u chatu
-- ✅ pre_generate step
-- ✅ Generation requirements check
-- ✅ "Nova sesija" button
-
-### V3 Fixes
-- ✅ Duplicate product chips
-- ✅ "Nastavi dalje" button
-- ✅ Init step enforcement
-- ✅ Synchronous scraping
-- ✅ Generation requirements validation
-
-### V4 Fixes
-- ✅ Progress tracking (📊 Napredak: 3/5)
-- ✅ Dynamic chip generation
-- ✅ Full reset API
-- ✅ "Bez Instagrama" flow
-- ✅ Enhanced scraping s fallbacks
-
-### V5 Fixes
-- ✅ OAuth redirect loop fix
-- ✅ Reset API column error (`ig_access_token` → `meta_access_token`)
-- ✅ Reference image upload system
-
-### V6 Fixes (Trenutna sesija)
-- ✅ Upload reference loop - specifični handleri PRIJE općeg
-- ✅ Web scraping za URL-ove
-- ✅ URL parsing fix (cijeli URL s domenom)
-- ✅ Profile page null safety (`_metadata`, `visual_style`, etc.)
-
----
-
-## 11. HANDLER REDOSLIJED U MESSAGE ROUTE
-
-**KRITIČNO:** Redoslijed handlera u `src/app/api/chat/message/route.ts` je bitan!
+### 8.2 Vercel Blob Fix (V7)
 
 ```typescript
-// 1. GLOBALNI HANDLERI (hvataju iz bilo kojeg stepa)
-if (norm.includes("spojen") && norm.includes("instagram")) { ... }  // IG connected
-if (norm.startsWith("cilj:")) { ... }                                // Goal answer
-if (norm.startsWith("profil:")) { ... }                              // Profile type
-if (norm.startsWith("fokus:")) { ... }                               // Focus
+// KRITIČNO: allowOverwrite za re-ingest
+async function putObjectBlob(key: string, body: Buffer, contentType: string) {
+  const blob = await put(key, body, {
+    access: "public",
+    contentType,
+    allowOverwrite: true,  // V7 FIX: re-ingest koristi iste keyeve
+  });
+  return blob.url;
+}
+```
 
-// 2. GLOBALNE KOMANDE
-if (norm.includes("prikaži") && norm.includes("proizvod")) { ... }
-if (norm.includes("potvrdi sve")) { ... }
-if (norm.includes("generiraj")) { ... }
-if (norm.includes("pove") && norm.includes("insta")) { ... }
-if (norm.includes("web") && norm.includes("stranic")) { ... }
+### 8.3 URL Helpers
 
-// 3. SPECIFIČNI UPLOAD HANDLERI (PRIJE općeg!)
-if (norm.includes("upload stil") || (step === "upload_reference" && norm.includes("stil"))) { ... }
-if (norm.includes("upload proizvod") || (step === "upload_reference" && norm.includes("proizvod"))) { ... }
-if (norm.includes("upload lik") || (step === "upload_reference" && norm.includes("lik"))) { ... }
-if (norm.includes("preskoči")) { ... }
+```typescript
+// src/lib/storageUrl.ts
+makePublicUrl()        // interno → HTTPS proxy za Vision API
+validateVisionUrl()    // provjera da URL radi za OpenAI
+getInternalStorageUrl() // server-side pristup MinIO-u
 
-// 4. OPĆI UPLOAD HANDLER (NAKON specifičnih!)
-if (norm.includes("uploaj") || (norm.includes("upload") && !specifični)) { ... }
-
-// 5. STEP-SPECIFIČNI HANDLERI
-if (step === "init") { ... }
-if (step === "no_instagram_options") { ... }
-if (step === "scrape_input") { ... }
-if (step === "website_input") { ... }
-if (step === "scrape_complete") { ... }
-if (step === "onboarding") { ... }
-
-// 6. DEFAULT
+// src/lib/makePublicUrl.ts
+// Vercel Blob → passthrough
+// MinIO → APP_URL/vissocial/... proxy
 ```
 
 ---
 
-## 12. API ENDPOINTS - KOMPLETNA LISTA
+## 9. INSTAGRAM → ANALIZA → NOTIFIKACIJA PIPELINE
+
+### 9.1 Kompletni Flow
+
+```
+1. Instagram OAuth (/api/instagram/callback)
+   → Token u projects.meta_access_token
+   → Queue: q_ingest.add("instagram.ingest")
+
+2. instagramIngest (worker)
+   → Fetch media putem Graph API
+   → Upload slike u storage (allowOverwrite!)
+   → INSERT assets s external_id
+   → Queue: q_analyze za svaki asset
+
+3. analyzeInstagram (worker)
+   → GPT-4 Vision analiza
+   → INSERT instagram_analyses
+   → INSERT detected_products (analysis_id, source)
+   → UPDATE brand_rebuild_events status
+
+4. brandRebuild (worker)
+   → Agregira visual_style, content_themes, caption_patterns
+   → UPDATE brand_profiles
+   → notify.analysisComplete()
+
+5. Frontend polling (5s)
+   → GET /api/chat/notifications
+   → Prikaže product_confirm chipove
+   → Klik → POST /api/products/confirm → zelena kvačica
+```
+
+### 9.2 brand_rebuild_events Lifecycle
+
+```
+pending → analyzing → ready → rebuilding → completed
+                                        → failed
+                                        → skipped (no analyses)
+```
+
+---
+
+## 10. API ENDPOINTS
 
 ### Chat
 ```
@@ -684,6 +558,11 @@ POST /api/chat/notifications    - Označi pročitano
 POST /api/chat/reset            - Reset sesije i projekta
 ```
 
+### Analyze (V3 — NOVO)
+```
+POST /api/analyze               - Dvofazna brand analiza (scrape + GPT)
+```
+
 ### Instagram
 ```
 GET  /api/instagram/login       - OAuth start
@@ -693,7 +572,7 @@ POST /api/instagram/scrape      - Web scraping profila
 
 ### Profile
 ```
-GET   /api/profile              - Dohvati brand profil + metadata
+GET   /api/profile              - Dohvati brand profil
 PATCH /api/profile              - Ažuriraj brand profil
 POST  /api/profile/rebuild      - Pokreni rebuild
 ```
@@ -704,7 +583,6 @@ GET    /api/products            - Lista proizvoda
 POST   /api/products/confirm    - Potvrdi proizvod
 POST   /api/products/reject     - Odbaci proizvod
 PATCH  /api/products/[id]       - Update proizvod
-DELETE /api/products/[id]       - Obriši proizvod
 ```
 
 ### Assets
@@ -714,17 +592,9 @@ GET    /api/assets/references   - Dohvati reference images
 DELETE /api/assets/[id]         - Obriši asset
 ```
 
-### Content
-```
-GET   /api/content/latest       - Zadnji content pack
-GET   /api/content/item         - Pojedinačni item
-PATCH /api/content/item         - Update item
-POST  /api/content/regenerate   - Regeneriraj
-```
-
 ---
 
-## 13. ENVIRONMENT VARIABLES
+## 11. ENVIRONMENT VARIABLES
 
 ```env
 # Database
@@ -733,11 +603,14 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/vissocial
 # Redis (VAŽNO: port 6380!)
 REDIS_URL=redis://localhost:6380
 
-# Storage (MinIO)
+# Storage - Local (MinIO)
 S3_ENDPOINT=http://localhost:9100
 S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
 S3_BUCKET=vissocial
+
+# Storage - Production (Vercel Blob)
+BLOB_READ_WRITE_TOKEN=vercel_blob_...
 
 # AI
 OPENAI_API_KEY=sk-...
@@ -747,10 +620,82 @@ FAL_KEY=...
 META_APP_ID=...
 META_APP_SECRET=...
 APP_URL=https://your-ngrok-url.ngrok-free.dev
+```
 
-# Optional
-ENABLE_INSTAGRAM_PUBLISH=false
-DEV_GENERATE_LIMIT=3
+---
+
+## 12. POZNATI BUGOVI I FIXES (POVIJEST)
+
+### V1-V6 Fixes (sažetak)
+- ✅ planGenerate column error (`arm_id` → `id`)
+- ✅ BullMQ lockDuration (30s → 60s+)
+- ✅ Notification sustav
+- ✅ Duplicate messages fix
+- ✅ OAuth redirect loop
+- ✅ Reset API column (`ig_access_token` → `meta_access_token`)
+- ✅ Reference image upload system
+- ✅ Upload reference loop fix
+- ✅ Profile page null safety
+
+### V7 Fixes
+- ✅ Uklonjen "Brzi pregled profila" iz INIT — samo 2 opcije
+- ✅ /analyze → /chat kontekst passing bez backend poziva
+- ✅ Database: `assets.external_id` kolona
+- ✅ Database: `detected_products.analysis_id` i `source` kolone
+- ✅ Storage: `allowOverwrite: true` za Vercel Blob
+- ✅ Product confirm: zelena kvačica nakon potvrde
+- ✅ Product confirm: uklonjen handleChipAction() nakon API
+
+### V3 Design System Migration
+- ✅ Novi design system komponente (ChatBubble, ChatLayout, etc.)
+- ✅ Dvoslojna navigacija (ChatLayout + AppHeader)
+- ✅ Profile Analysis stranica (/analyze/[handle])
+- ✅ Lavender gradient pozadina
+- ✅ AI avatar (sparkle, NE robot)
+- ✅ Tailwind custom boje (primary, lavender)
+
+---
+
+## 13. FOLDER STRUKTURA (V3)
+
+```
+src/
+├── app/
+│   ├── globals.css
+│   ├── layout.tsx              ← Root layout + AppHeader
+│   ├── page.tsx                ← Landing page
+│   ├── analyze/
+│   │   └── [handle]/
+│   │       ├── page.tsx        ← Server component
+│   │       └── ProfileAnalysisClient.tsx
+│   ├── chat/
+│   │   └── page.tsx            ← Chat s FSM
+│   ├── calendar/
+│   ├── profile/
+│   └── settings/
+├── ui/
+│   ├── index.ts
+│   ├── ChatBubble.tsx
+│   ├── ChatLayout.tsx
+│   ├── AppHeader.tsx
+│   ├── Button.tsx
+│   ├── Card.tsx
+│   ├── Chip.tsx
+│   ├── Avatar.tsx
+│   ├── Icons.tsx
+│   └── Input.tsx
+├── lib/
+│   ├── config.ts
+│   ├── db.ts
+│   ├── storage.ts
+│   ├── storageUrl.ts
+│   └── notifications.ts
+└── server/
+    └── processors/
+        ├── instagramIngest.ts
+        ├── analyzeInstagram.ts
+        ├── brandRebuild.ts
+        └── planGenerate.ts
 ```
 
 ---
@@ -762,26 +707,26 @@ Prije svakog odgovora:
 - [ ] Koristi `project_knowledge_search` za provjeru koda
 - [ ] Provjeri odgovara li database schema
 - [ ] Generiraj KOMPLETNE datoteke, ne snippete
-- [ ] Provjeri koristi li se URL (ne base64) za Vision API
-- [ ] Provjeri koriste li se ispravna imena kolona (`id`/`params`, NE `arm_id`/`arm_params`)
 - [ ] Redis port = **6380**
 - [ ] Project ID = **"proj_local"**
-- [ ] Token kolona = **meta_access_token** (NE ig_access_token)
-- [ ] Handler redoslijed u message route (specifični PRIJE općih)
+- [ ] Token kolona = **meta_access_token**
+- [ ] Storage: **allowOverwrite: true** za Vercel Blob
+- [ ] Komponente u **src/ui/** (NE src/components/)
+- [ ] ChatChipData ima **confirmed** prop za vizualni feedback
 
 ---
 
 ## 15. BUDUĆE FAZE (TODO)
 
 ### Kratkoročno
-- [ ] File upload handling u chat UI (drag & drop)
+- [ ] Error handling poboljšanja na /analyze stranici
 - [ ] Toast notifikacije za upload success/error
-- [ ] Thumbnail preview u chat bubbleu
+- [ ] Step indicator dinamičko ažuriranje u ChatLayout
 
 ### Srednjoročno
 - [ ] Multi-image upload
-- [ ] Image crop/resize prije uploada
-- [ ] Reference image reordering (prioritet)
+- [ ] Cleanup: obrisati Card.tsx, Badge.tsx ako se ne koriste
+- [ ] Cleanup: obrisati ChipButton iz page.tsx (handleSmartChipClick ga zamjenjuje)
 
 ### Dugoročno
 - [ ] Shopify integration
@@ -793,4 +738,4 @@ Prije svakog odgovora:
 **KRAJ DOKUMENTA**
 
 *Ovaj dokument je autoritativan izvor znanja o Vissocial projektu.*
-*Zadnje ažuriranje: Veljača 2026 - V6 fixes i Profile Page*
+*Zadnje ažuriranje: 7. veljače 2026 — V3 Design System Migration + V7 Fixes*
