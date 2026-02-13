@@ -38,8 +38,6 @@ if (process.env.NODE_ENV !== "production") {
   try { require("dotenv/config"); } catch {}
 }
 
-import { Worker } from "bullmq";
-// ... rest of imports
 
 // Only load .env in development (Railway provides env vars directly)
 if (process.env.NODE_ENV !== "production") {
