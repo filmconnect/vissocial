@@ -418,6 +418,12 @@ ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
 ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram_vision';
 
 
+ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS message TEXT;
+ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS data JSONB DEFAULT '{}';
+ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS chips JSONB DEFAULT '[]';
+
+
 -- ============================================================
 -- DONE
 -- ============================================================
