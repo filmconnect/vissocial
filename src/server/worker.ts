@@ -8,7 +8,10 @@
 // - Schedule.tick no longer blocks other jobs
 // ============================================================
 
-import "dotenv/config";
+// Only load .env in development (Railway provides env vars directly)
+if (process.env.NODE_ENV !== "production") {
+  try { require("dotenv/config"); } catch {}
+}
 import { Worker } from "bullmq";
 import { config } from "@/lib/config";
 import { log } from "@/lib/logger";
