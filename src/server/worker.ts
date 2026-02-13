@@ -14,6 +14,33 @@ console.log("REDIS_URL:", process.env.REDIS_URL);
 console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("========================");
 
+// FIRST - debug
+console.log("=== WORKER ENV DEBUG ===");
+console.log("REDIS_URL:", process.env.REDIS_URL);
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("DATABASE_URL:", process.env.DATABASE_URL ? "SET" : "MISSING");
+console.log("OPENAI_API_KEY:", process.env.OPENAI_API_KEY ? "SET" : "MISSING");
+console.log("FAL_KEY:", process.env.FAL_KEY ? "SET" : "MISSING");
+console.log("========================");
+
+// Catch silent crashes
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+  process.exit(1);
+});
+
+// Only load .env in development
+if (process.env.NODE_ENV !== "production") {
+  try { require("dotenv/config"); } catch {}
+}
+
+import { Worker } from "bullmq";
+// ... rest of imports
+
 // Only load .env in development (Railway provides env vars directly)
 if (process.env.NODE_ENV !== "production") {
   try { require("dotenv/config"); } catch {}

@@ -8,8 +8,8 @@
     "dev": "cross-env REDIS_URL=redis://localhost:6380 next dev",
     "build": "next build",
     "start": "next start",
+	"worker": "tsx src/server/worker.ts",
     "worker:old": "cross-env REDIS_URL=redis://localhost:6380 tsx src/server/worker.ts",
-    "worker": "tsx src/server/worker.ts",
     "migrate": "tsx src/lib/sql.ts migrate"
 },
   "dependencies": {
