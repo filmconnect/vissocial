@@ -8,6 +8,12 @@
 // - Schedule.tick no longer blocks other jobs
 // ============================================================
 
+// FIRST LINE OF FILE - before any imports
+console.log("=== WORKER ENV DEBUG ===");
+console.log("REDIS_URL:", process.env.REDIS_URL);
+console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("========================");
+
 // Only load .env in development (Railway provides env vars directly)
 if (process.env.NODE_ENV !== "production") {
   try { require("dotenv/config"); } catch {}
