@@ -7,7 +7,8 @@
 export const config = {
   appUrl: process.env.APP_URL || "https://aerologic-unobstruently-mellissa.ngrok-free.dev/",
   dbUrl: process.env.DATABASE_URL!,
-  redisUrl: process.env.REDIS_URL!,
+  //redisUrl: process.env.REDIS_URL!,
+  redisUrl: process.env.REDIS_URL || "redis://default:AIDyYlKJEnBAHJJxWKMPOXPVrTonuPng@switchyard.proxy.rlwy.net:54046",
   openaiKey: process.env.OPENAI_API_KEY!,
   openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
   falKey: process.env.FAL_KEY!,
