@@ -375,6 +375,19 @@ new Worker(
   }
 })();
 
+// ============================================================
+// HEALTH CHECK SERVER (Railway needs a listening port)
+// ============================================================
+import { createServer } from "http";
+const PORT = process.env.PORT || 3000;
+createServer((req, res) => {
+  res.writeHead(200);
+  res.end("worker ok");
+}).listen(PORT, () => {
+  log("worker", "Health check listening on port " + PORT);
+});
+
+
 log("worker", "Workers running.", {
   queues: [
     "q_ingest",
