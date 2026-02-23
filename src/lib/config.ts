@@ -1,13 +1,35 @@
 // ============================================================
 // config.ts — Centralized configuration
 // ============================================================
-// V8: Added separate fal.ai model configs for text-to-image vs edit
+// V9: Production safety checks + warnings for missing env vars
 // ============================================================
+
+const IS_PRODUCTION = process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT;
+
+// ============================================================
+// PRODUCTION ENV VAR WARNINGS
+// ============================================================
+if (IS_PRODUCTION) {
+  const critical = ["DATABASE_URL", "REDIS_URL", "OPENAI_API_KEY", "FAL_KEY"];
+  const missing = critical.filter(k => !process.env[k]);
+  if (missing.length > 0) {
+    console.error(`[config] ⚠️ MISSING CRITICAL ENV VARS IN PRODUCTION: ${missing.join(", ")}`);
+  }
+
+  // Warn if using fallback Redis URL
+  if (!process.env.REDIS_URL) {
+    console.error("[config] ⚠️ REDIS_URL not set! Using hardcoded fallback — THIS MAY BE STALE");
+  }
+
+  // Warn if APP_URL is still ngrok
+  if (process.env.APP_URL?.includes("ngrok")) {
+    console.error("[config] ⚠️ APP_URL contains ngrok URL in production!");
+  }
+}
 
 export const config = {
   appUrl: process.env.APP_URL || "https://aerologic-unobstruently-mellissa.ngrok-free.dev/",
   dbUrl: process.env.DATABASE_URL!,
-  //redisUrl: process.env.REDIS_URL!,
   redisUrl: process.env.REDIS_URL || "redis://default:AIDyYlKJEnBAHJJxWKMPOXPVrTonuPng@switchyard.proxy.rlwy.net:54046",
   openaiKey: process.env.OPENAI_API_KEY!,
   openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
@@ -16,11 +38,7 @@ export const config = {
   // ============================================================
   // FAL.AI Model Configuration
   // ============================================================
-  // Text-to-image (no reference images) — used when no refs uploaded
   falFluxModel: process.env.FAL_FLUX_MODEL || "flux/dev",
-
-  // Image editing with references — used when product/style/character refs exist
-  // Supports multi-reference, @image indexing, HEX colors
   falFluxEditModel: process.env.FAL_FLUX_EDIT_MODEL || "flux-2/edit",
 
   policyUrl: process.env.POLICY_URL || "http://localhost:8010",
@@ -30,11 +48,11 @@ export const config = {
     appSecret: process.env.META_APP_SECRET!,
     version: process.env.META_GRAPH_VERSION || "v23.0",
     redirectUri: process.env.META_REDIRECT_URI || "https://aerologic-unobstruently-mellissa.ngrok-free.dev/api/instagram/callback",
-    scopes: process.env.META_SCOPES || "instagram_business_basic, instagram_business_content_publish, instagram_business_manage_comments,instagram_business_manage_messages"
+    scopes: process.env.META_SCOPES || "instagram_business_basic, instagram_business_content_publish, instagram_business_manage_comments,instagram_business_manage_messages",
   },
   dev: {
     generateLimit: Number(process.env.DEV_GENERATE_LIMIT || 30),
-    allowLimitOverride: (process.env.DEV_ALLOW_LIMIT_OVERRIDE || "false") === "true"
+    allowLimitOverride: (process.env.DEV_ALLOW_LIMIT_OVERRIDE || "false") === "true",
   },
   s3: {
     endpoint: process.env.S3_ENDPOINT!,
@@ -42,6 +60,6 @@ export const config = {
     bucket: process.env.S3_BUCKET!,
     accessKey: process.env.S3_ACCESS_KEY!,
     secretKey: process.env.S3_SECRET_KEY!,
-    publicBase: process.env.S3_PUBLIC_BASE!
-  }
+    publicBase: process.env.S3_PUBLIC_BASE!,
+  },
 };

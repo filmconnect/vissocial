@@ -1,20 +1,18 @@
 // ============================================================
-// WORKER.TS - BullMQ Workers
+// WORKER.TS - BullMQ Workers (Production Debug Edition)
 // ============================================================
 
-// dotenv MORA biti static import — izvršava se PRIJE config.ts
-// (stari `if (!production) require("dotenv/config")` nije radio
-//  jer se config.ts kao static import učitavao prije runtime koda)
-// Sigurno i na produkciji: dotenv NE overridea postojeće env varijable.
-import "dotenv/config";
-
-// Debug env vars
+// Debug env vars — this runs BEFORE any imports
 console.log("=== WORKER ENV DEBUG ===");
-console.log("REDIS_URL:", process.env.REDIS_URL);
+console.log("REDIS_URL:", process.env.REDIS_URL ? process.env.REDIS_URL.replace(/:[^:@]+@/, ":***@") : "MISSING");
 console.log("NODE_ENV:", process.env.NODE_ENV);
+console.log("RAILWAY_ENVIRONMENT:", process.env.RAILWAY_ENVIRONMENT || "NOT SET");
 console.log("DATABASE_URL:", process.env.DATABASE_URL ? "SET" : "MISSING");
 console.log("OPENAI_API_KEY:", process.env.OPENAI_API_KEY ? "SET" : "MISSING");
 console.log("FAL_KEY:", process.env.FAL_KEY ? "SET" : "MISSING");
+console.log("BLOB_READ_WRITE_TOKEN:", process.env.BLOB_READ_WRITE_TOKEN ? "SET" : "MISSING");
+console.log("APP_DEBUG:", process.env.APP_DEBUG || "NOT SET");
+console.log("PORT:", process.env.PORT || "NOT SET (will use 3000)");
 console.log("========================");
 
 // Catch silent crashes
@@ -25,27 +23,51 @@ process.on("unhandledRejection", (err) => {
   console.error("UNHANDLED REJECTION:", err);
 });
 
+// Only load .env in development
+if (process.env.NODE_ENV !== "production" && !process.env.RAILWAY_ENVIRONMENT) {
+  try { require("dotenv/config"); } catch {}
+}
+
 // ============================================================
 // HEALTH CHECK SERVER - must be early so Railway doesn't kill us
-// Samo u produkciji — lokalno port 3000 koristi Next.js
 // ============================================================
-if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT) {
-  const { createServer } = await import("http");
-  const PORT = process.env.PORT || 3000;
-  createServer((req, res) => {
+import { createServer } from "http";
+const PORT = process.env.PORT || 3000;
+
+let workerHealthy = true;
+let redisConnected = false;
+let lastRedisError: string | null = null;
+let jobsProcessed = 0;
+let jobsFailed = 0;
+
+createServer((req, res) => {
+  if (req.url === "/health" || req.url === "/") {
+    const status = {
+      status: workerHealthy ? "ok" : "degraded",
+      redis: redisConnected ? "connected" : "disconnected",
+      lastRedisError,
+      jobsProcessed,
+      jobsFailed,
+      uptime: process.uptime(),
+      memory: process.memoryUsage().rss,
+    };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(status));
+  } else {
     res.writeHead(200);
     res.end("worker ok");
-  }).listen(PORT, () => {
-    console.log(`[worker] Health check listening on port ${PORT}`);
-  });
-}
+  }
+}).listen(PORT, () => {
+  console.log(`[worker] Health check listening on port ${PORT}`);
+});
 
 // ============================================================
 // IMPORTS
 // ============================================================
+import IORedis from "ioredis";
 import { Worker } from "bullmq";
 import { config } from "@/lib/config";
-import { log } from "@/lib/logger";
+import { log, logError } from "@/lib/logger";
 
 import { instagramIngest } from "./processors/instagramIngest";
 import { planGenerate } from "./processors/planGenerate";
@@ -59,8 +81,51 @@ import { qPublish } from "@/lib/jobs";
 import { ensureBucket } from "@/lib/storage";
 
 // ============================================================
-// REDIS CONNECTION
+// REDIS CONNECTION with monitoring
 // ============================================================
+
+log("worker", "boot", {
+  redis: config.redisUrl ? config.redisUrl.replace(/:[^:@]+@/, ":***@") : "MISSING",
+  pid: process.pid,
+});
+
+// Create a shared IORedis connection for monitoring
+const redisConnection = new IORedis(config.redisUrl, {
+  maxRetriesPerRequest: null, // Required by BullMQ
+  enableReadyCheck: true,
+  retryStrategy(times: number) {
+    const delay = Math.min(times * 500, 5000);
+    log("redis", "retry", { attempt: times, delay_ms: delay });
+    return delay;
+  },
+});
+
+redisConnection.on("connect", () => {
+  redisConnected = true;
+  log("redis", "connected", { url: config.redisUrl?.replace(/:[^:@]+@/, ":***@") });
+});
+
+redisConnection.on("ready", () => {
+  redisConnected = true;
+  log("redis", "ready");
+});
+
+redisConnection.on("error", (err) => {
+  redisConnected = false;
+  lastRedisError = err.message;
+  logError("redis", "connection error", err);
+});
+
+redisConnection.on("close", () => {
+  redisConnected = false;
+  log("redis", "connection closed");
+});
+
+redisConnection.on("reconnecting", () => {
+  log("redis", "reconnecting");
+});
+
+// BullMQ connection config — use URL string, let BullMQ handle it
 const connection = { url: config.redisUrl };
 
 const baseWorkerConfig = {
@@ -69,11 +134,6 @@ const baseWorkerConfig = {
   stalledInterval: 30000,
   maxStalledCount: 2,
 };
-
-log("worker", "boot", {
-  redis: config.redisUrl,
-  pid: process.pid,
-});
 
 // ============================================================
 // ENSURE STORAGE BUCKET
@@ -85,24 +145,61 @@ try {
 }
 
 // ============================================================
+// HELPER: Wrap processor with logging
+// ============================================================
+function wrapProcessor(
+  queueName: string,
+  handlers: Record<string, (data: any) => Promise<any>>
+) {
+  return async (job: any) => {
+    const startTime = Date.now();
+    log(`worker:${queueName}`, "job received", {
+      name: job.name,
+      id: job.id,
+      data: job.data,
+      attempt: job.attemptsMade + 1,
+    });
+
+    const handler = handlers[job.name];
+    if (!handler) {
+      const err = new Error(`Unknown job: ${job.name} in ${queueName}`);
+      logError(`worker:${queueName}`, "unknown job type", err);
+      throw err;
+    }
+
+    try {
+      const res = await handler(job.data);
+      const duration = Date.now() - startTime;
+      jobsProcessed++;
+      log(`worker:${queueName}`, "job finished", {
+        name: job.name,
+        id: job.id,
+        duration_ms: duration,
+        result_summary: res ? Object.keys(res) : null,
+      });
+      return res;
+    } catch (e: any) {
+      const duration = Date.now() - startTime;
+      jobsFailed++;
+      logError(`worker:${queueName}`, "job failed", e, {
+        name: job.name,
+        id: job.id,
+        duration_ms: duration,
+        data: job.data,
+      });
+      throw e;
+    }
+  };
+}
+
+// ============================================================
 // INGEST WORKER
 // ============================================================
 new Worker(
   "q_ingest",
-  async (job) => {
-    log("worker:q_ingest", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "instagram.ingest") {
-        const res = await instagramIngest(job.data);
-        log("worker:q_ingest", "job finished", res);
-        return res;
-      }
-      throw new Error("Unknown ingest job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_ingest", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_ingest", {
+    "instagram.ingest": instagramIngest,
+  }),
   { ...baseWorkerConfig }
 );
 
@@ -111,20 +208,9 @@ new Worker(
 // ============================================================
 new Worker(
   "q_llm",
-  async (job) => {
-    log("worker:q_llm", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "plan.generate") {
-        const res = await planGenerate(job.data);
-        log("worker:q_llm", "job finished", res);
-        return res;
-      }
-      throw new Error("Unknown llm job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_llm", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_llm", {
+    "plan.generate": planGenerate,
+  }),
   { ...baseWorkerConfig, lockDuration: 120000, concurrency: 1 }
 );
 
@@ -133,21 +219,10 @@ new Worker(
 // ============================================================
 new Worker(
   "q_render",
-  async (job) => {
-    log("worker:q_render", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "render.flux") {
-        const res = await renderFlux(job.data);
-        log("worker:q_render", "job finished", res);
-        return res;
-      }
-      throw new Error("Unknown render job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_render", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
-  { ...baseWorkerConfig, lockDuration: 90000, concurrency: 3 }
+  wrapProcessor("q_render", {
+    "render.flux": renderFlux,
+  }),
+  { ...baseWorkerConfig, lockDuration: 180000, concurrency: 3 }  // INCREASED from 90s to 180s for fal.ai
 );
 
 // ============================================================
@@ -155,25 +230,10 @@ new Worker(
 // ============================================================
 new Worker(
   "q_publish",
-  async (job) => {
-    log("worker:q_publish", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "publish.instagram") {
-        const res = await publishInstagram(job.data);
-        log("worker:q_publish", "job finished", res);
-        return res;
-      }
-      if (job.name === "schedule.tick") {
-        const res = await scheduleTick(job.data);
-        log("worker:q_publish", "schedule.tick done", res);
-        return res;
-      }
-      throw new Error("Unknown publish job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_publish", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_publish", {
+    "publish.instagram": publishInstagram,
+    "schedule.tick": scheduleTick,
+  }),
   { ...baseWorkerConfig, concurrency: 3, limiter: { max: 10, duration: 60000 } }
 );
 
@@ -182,20 +242,9 @@ new Worker(
 // ============================================================
 new Worker(
   "q_metrics",
-  async (job) => {
-    log("worker:q_metrics", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "metrics.ingest") {
-        const res = await metricsIngest(job.data);
-        log("worker:q_metrics", "job finished", res);
-        return res;
-      }
-      throw new Error("Unknown metrics job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_metrics", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_metrics", {
+    "metrics.ingest": metricsIngest,
+  }),
   { ...baseWorkerConfig }
 );
 
@@ -204,24 +253,9 @@ new Worker(
 // ============================================================
 new Worker(
   "q_analyze",
-  async (job) => {
-    log("worker:q_analyze", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "analyze.instagram") {
-        const res = await analyzeInstagram(job.data);
-        log("worker:q_analyze", "job finished", {
-          asset_id: res.asset_id,
-          success: res.success,
-          products_found: res.products_found
-        });
-        return res;
-      }
-      throw new Error("Unknown analyze job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_analyze", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_analyze", {
+    "analyze.instagram": analyzeInstagram,
+  }),
   { ...baseWorkerConfig, lockDuration: 90000, concurrency: 3 }
 );
 
@@ -230,23 +264,9 @@ new Worker(
 // ============================================================
 new Worker(
   "q_brand_rebuild",
-  async (job) => {
-    log("worker:q_brand_rebuild", "job received", { name: job.name, id: job.id, data: job.data });
-    try {
-      if (job.name === "brand.rebuild") {
-        const res = await brandRebuild(job.data);
-        log("worker:q_brand_rebuild", "job finished", {
-          project_id: job.data.project_id,
-          success: res.success
-        });
-        return res;
-      }
-      throw new Error("Unknown brand rebuild job: " + job.name);
-    } catch (e: any) {
-      log("worker:q_brand_rebuild", "job failed", { name: job.name, error: e.message });
-      throw e;
-    }
-  },
+  wrapProcessor("q_brand_rebuild", {
+    "brand.rebuild": brandRebuild,
+  }),
   { ...baseWorkerConfig, concurrency: 1 }
 );
 
@@ -269,15 +289,24 @@ new Worker(
         repeat: { every: 5 * 60 * 1000 },
         jobId: "schedule-tick-main",
         removeOnComplete: true,
-        removeOnFail: 10
+        removeOnFail: 10,
       }
     );
     log("worker:scheduler", "schedule.tick registered - every 5 minutes");
   } catch (e: any) {
-    log("worker:scheduler", "schedule.tick registration failed", { error: e.message });
+    logError("worker:scheduler", "schedule.tick registration failed", e);
   }
 })();
 
-log("worker", "Workers running.", {
-  queues: ["q_ingest", "q_llm", "q_render", "q_publish", "q_metrics", "q_analyze", "q_brand_rebuild"]
+log("worker", "All workers started", {
+  queues: ["q_ingest", "q_llm", "q_render", "q_publish", "q_metrics", "q_analyze", "q_brand_rebuild"],
+  lockDurations: {
+    q_ingest: 60000,
+    q_llm: 120000,
+    q_render: 180000,
+    q_publish: 60000,
+    q_metrics: 60000,
+    q_analyze: 90000,
+    q_brand_rebuild: 60000,
+  },
 });
