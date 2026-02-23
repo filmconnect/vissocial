@@ -2,6 +2,12 @@
 // WORKER.TS - BullMQ Workers
 // ============================================================
 
+// dotenv MORA biti static import — izvršava se PRIJE config.ts
+// (stari `if (!production) require("dotenv/config")` nije radio
+//  jer se config.ts kao static import učitavao prije runtime koda)
+// Sigurno i na produkciji: dotenv NE overridea postojeće env varijable.
+import "dotenv/config";
+
 // Debug env vars
 console.log("=== WORKER ENV DEBUG ===");
 console.log("REDIS_URL:", process.env.REDIS_URL);
@@ -19,22 +25,20 @@ process.on("unhandledRejection", (err) => {
   console.error("UNHANDLED REJECTION:", err);
 });
 
-// Only load .env in development
-if (process.env.NODE_ENV !== "production") {
-  try { require("dotenv/config"); } catch {}
-}
-
 // ============================================================
 // HEALTH CHECK SERVER - must be early so Railway doesn't kill us
+// Samo u produkciji — lokalno port 3000 koristi Next.js
 // ============================================================
-import { createServer } from "http";
-const PORT = process.env.PORT || 3000;
-createServer((req, res) => {
-  res.writeHead(200);
-  res.end("worker ok");
-}).listen(PORT, () => {
-  console.log(`[worker] Health check listening on port ${PORT}`);
-});
+if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT) {
+  const { createServer } = await import("http");
+  const PORT = process.env.PORT || 3000;
+  createServer((req, res) => {
+    res.writeHead(200);
+    res.end("worker ok");
+  }).listen(PORT, () => {
+    console.log(`[worker] Health check listening on port ${PORT}`);
+  });
+}
 
 // ============================================================
 // IMPORTS
