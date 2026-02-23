@@ -1,7 +1,7 @@
 // ============================================================
 // renderFlux.ts — Image rendering via fal.ai
 // ============================================================
-// V8: Smart reference routing
+// V9: Hard cap of 4 image_urls (fal.ai FLUX.2 edit limit)
 //
 // Reference types and how they're used:
 //
@@ -19,7 +19,14 @@
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { falGenerateImage } from "@/lib/fal";
-import { log } from "@/lib/logger";
+import { log, logError } from "@/lib/logger";
+
+// ============================================================
+// Constants
+// ============================================================
+
+/** fal.ai FLUX.2 edit API hard limit */
+const FAL_MAX_IMAGE_URLS = 4;
 
 // ============================================================
 // Types
@@ -39,23 +46,16 @@ interface GroupedRefs {
 // ============================================================
 // Creative environment scenes for Instagram
 // ============================================================
-// Each scene is a visually appealing, Instagram-worthy setting.
-// The product gets placed into these scenes as the hero subject.
-// Deterministic per content_item_id so re-renders are consistent.
-// ============================================================
 
 const CREATIVE_SCENES = [
-  "on a rustic wooden café table in a cozy European coffee shop, warm morning light streaming through the window, latte art coffee cup nearby, bokeh background",
-  "held in someone's hand on a sunlit balcony overlooking a Mediterranean coastal town, lush green hills and terracotta rooftops in the background, golden hour lighting",
-  "resting on a marble countertop in a stylish modern apartment, large window showing a cityscape of Zagreb at sunset, soft natural lighting",
-  "placed on weathered stone steps in a charming London side street, red brick buildings and autumn leaves in the background, moody atmospheric lighting",
-  "on a blanket in a sun-dappled park, cherry blossoms gently falling, soft pastel tones, dreamy shallow depth of field",
+  "on a rustic wooden table in a cozy coffee shop with warm bokeh lights and a latte art cup nearby, intimate afternoon atmosphere",
+  "resting on a marble countertop in a bright modern kitchen, fresh herbs and citrus fruits artfully scattered, morning sunlight streaming through the window",
   "displayed on a sleek wooden desk next to a monstera plant, minimalist Scandinavian interior, large window with forest view, natural diffused light",
-  "on an outdoor bistro table in Paris, Eiffel Tower softly blurred in the far background, morning croissant and espresso nearby, cinematic composition",
-  "resting on a cozy window seat with rain drops on the glass, city lights twinkling outside at dusk, warm indoor lighting, hygge atmosphere",
-  "placed on a vintage velvet armchair in a bohemian loft, exposed brick walls, string lights, plants hanging from ceiling, warm golden tones",
-  "on a beach towel at a tropical seaside, turquoise water and white sand in background, palm leaf shadow casting artistic patterns, vibrant summer colors",
-  "displayed on a floating wooden tray in a luxurious bathtub setting, candles and eucalyptus branches nearby, spa-like serene atmosphere",
+  "placed on a velvet cushion atop vintage books in a library setting, warm golden reading lamp light, rich mahogany shelves in soft focus behind",
+  "floating on a bed of fresh flower petals — roses, peonies, lavender — shot from above, soft pastel tones, dreamy flatlay composition",
+  "set on a sandy beach at sunset, gentle waves in the background, warm golden hour light casting long shadows, tropical paradise mood",
+  "balanced on a mossy rock in an enchanted forest, dappled sunlight through tall trees, ferns and tiny mushrooms in foreground, magical atmosphere",
+  "positioned on a clean white bed with rumpled linen sheets and soft pillows, morning light through sheer curtains, minimal luxe lifestyle",
   "held up against a dramatic mountain landscape at golden hour, alpine meadow with wildflowers, cinematic wide composition with shallow focus on the product",
   "on a wrought-iron garden table surrounded by blooming roses, English cottage garden in soft morning mist, romantic pastoral atmosphere",
   "centered on a polished concrete surface in a trendy gallery space, abstract art on walls in background, museum-quality directional lighting",
@@ -109,6 +109,43 @@ async function gatherRefsGrouped(project_id: string): Promise<{ grouped: Grouped
 }
 
 // ============================================================
+// Prioritize and cap references to FAL_MAX_IMAGE_URLS
+// ============================================================
+// Priority order:
+//   1. First product_reference (hero product — most important)
+//   2. First style_reference (aesthetic matching)
+//   3. First character_reference (person consistency)
+//   4. Fill remaining slot(s) from extras in same priority order
+// ============================================================
+
+function prioritizeRefs(ordered: RefImage[]): RefImage[] {
+  const products = ordered.filter(r => r.label === "product_reference");
+  const styles = ordered.filter(r => r.label === "style_reference");
+  const characters = ordered.filter(r => r.label === "character_reference");
+
+  const selected: RefImage[] = [];
+
+  // Round 1: first of each type
+  if (products.length > 0) selected.push(products[0]);
+  if (styles.length > 0 && selected.length < FAL_MAX_IMAGE_URLS) selected.push(styles[0]);
+  if (characters.length > 0 && selected.length < FAL_MAX_IMAGE_URLS) selected.push(characters[0]);
+
+  // Round 2: fill remaining slots with extras (second style, second character, etc.)
+  const extras = [
+    ...styles.slice(1),
+    ...characters.slice(1),
+    ...products.slice(1),
+  ];
+
+  for (const ref of extras) {
+    if (selected.length >= FAL_MAX_IMAGE_URLS) break;
+    selected.push(ref);
+  }
+
+  return selected;
+}
+
+// ============================================================
 // Build smart prompt based on reference types
 // ============================================================
 
@@ -138,8 +175,6 @@ function buildSmartPrompt(
   }
 
   // === PRODUCT REFERENCES ===
-  // Strict fidelity: product must be pixel-perfect identical
-  // Only ONE product as hero subject — never multiple
   if (productIndices.length > 0) {
     const heroIdx = productIndices[0];
     const scene = getSceneForItem(content_item_id);
@@ -222,24 +257,25 @@ export async function renderFlux(data: {
   let smartPrompt = prompt;
 
   if (data.image_urls && data.image_urls.length > 0) {
-    imageUrls = data.image_urls;
+    // Explicit image_urls passed — still enforce cap
+    imageUrls = data.image_urls.slice(0, FAL_MAX_IMAGE_URLS);
     smartPrompt = prompt;
 
     log("renderFlux", "using explicit image_urls", {
       content_item_id,
       num_refs: imageUrls.length,
+      original_count: data.image_urls.length,
+      capped: data.image_urls.length > FAL_MAX_IMAGE_URLS,
     });
   } else if (project_id) {
     const { grouped, ordered } = await gatherRefsGrouped(project_id);
 
-    // Keep only FIRST product ref for single-product focus
-    // Keep all style and character refs
-    const limitedOrdered = ordered.filter((ref, idx) => {
-      if (ref.label === "product_reference") {
-        return ordered.findIndex(r => r.label === "product_reference") === idx;
-      }
-      return true;
-    });
+    // ============================================================
+    // FIX: Cap refs to FAL_MAX_IMAGE_URLS (4) with smart priority
+    // Before: kept all style + character refs → could exceed 4
+    // After: prioritize 1 product → 1 style → 1 character → fill remaining
+    // ============================================================
+    const limitedOrdered = prioritizeRefs(ordered);
 
     imageUrls = limitedOrdered.map(r => r.url);
     smartPrompt = buildSmartPrompt(prompt, grouped, limitedOrdered, content_item_id);
@@ -250,7 +286,10 @@ export async function renderFlux(data: {
       product_refs: grouped.product.length,
       style_refs: grouped.style.length,
       character_refs: grouped.character.length,
+      total_available: ordered.length,
       refs_used: limitedOrdered.length,
+      ref_labels: limitedOrdered.map(r => r.label),
+      fal_max: FAL_MAX_IMAGE_URLS,
       smart_prompt: smartPrompt.substring(0, 300),
     });
   }
@@ -304,6 +343,7 @@ export async function renderFlux(data: {
         JSON.stringify({
           error: e.message,
           refs: imageUrls,
+          num_refs: imageUrls.length,
           smart_prompt: smartPrompt,
           original_prompt: prompt,
         }),
@@ -311,10 +351,10 @@ export async function renderFlux(data: {
       ]
     );
 
-    log("renderFlux", "render failed", {
+    logError("renderFlux", "render failed", e, {
       content_item_id,
       renderId,
-      error: e.message,
+      num_refs: imageUrls.length,
     });
 
     throw e;
