@@ -8,10 +8,10 @@
     "dev": "cross-env REDIS_URL=redis://localhost:6380 next dev",
     "build": "next build",
     "start": "next start",
-	"worker": "tsx src/server/worker.ts",
+    "worker": "tsx src/server/worker.ts",
     "worker:old": "cross-env REDIS_URL=redis://localhost:6380 tsx src/server/worker.ts",
     "migrate": "tsx src/lib/sql.ts migrate"
-},
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/s3-request-presigner": "^3.758.0",
@@ -21,6 +21,7 @@
     "csv-stringify": "^6.5.0",
     "dayjs": "^1.11.11",
     "dotenv": "^17.2.3",
+    "ioredis": "^5.9.3",
     "jszip": "^3.10.1",
     "next": "^14.2.35",
     "openai": "^6.17.0",
