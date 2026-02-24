@@ -182,7 +182,7 @@ export async function instagramIngest(
       const uploadedUrl = await putObject(s3Key, buffer, contentType);
       
       // CRITICAL: Convert to public HTTPS URL
-      const publicUrl = makePublicUrl(s3Key);
+      const publicUrl = makePublicUrl(uploadedUrl);
       
       log("instagramIngest", "url_generated", {
         ig_id: m.id,
