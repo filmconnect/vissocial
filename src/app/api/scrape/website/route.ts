@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { getProjectId } from "@/lib/projectId";
@@ -6,7 +6,7 @@ import { v4 as uuid } from "uuid";
 import OpenAI from "openai";
 import { config } from "@/lib/config";
 
-// V9: PROJECT_ID removed — now uses getProjectId()
+// V9: PROJECT_ID removed â€” now uses getProjectId()
 const openai = new OpenAI({ apiKey: config.openaiKey });
 
 // ============================================================
@@ -169,7 +169,7 @@ Opis: ${basicData.description || "N/A"}
 Tekst stranice (uzorak):
 ${basicData.raw_text_sample}
 
-Izvuci i vrati JSON sa sljedećim poljima:
+Izvuci i vrati JSON sa sljedeÄ‡im poljima:
 {
   "brand_name": "ime brenda/firme",
   "about": "kratak opis firme (max 200 znakova)",
@@ -182,7 +182,7 @@ Izvuci i vrati JSON sa sljedećim poljima:
     "phone": "telefon ako postoji", 
     "address": "adresa ako postoji"
   },
-  "colors": ["#hex1", "#hex2"] // dominantne boje ako možeš prepoznati iz teksta
+  "colors": ["#hex1", "#hex2"] // dominantne boje ako moÅ¾eÅ¡ prepoznati iz teksta
 }
 
 Vrati SAMO JSON, bez dodatnog teksta.`;
@@ -191,7 +191,7 @@ Vrati SAMO JSON, bez dodatnog teksta.`;
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Ti si expert za ekstrakciju podataka s web stranica. Vraćaš samo validan JSON." },
+        { role: "system", content: "Ti si expert za ekstrakciju podataka s web stranica. VraÄ‡aÅ¡ samo validan JSON." },
         { role: "user", content: prompt }
       ],
       temperature: 0.3,
@@ -213,7 +213,7 @@ Vrati SAMO JSON, bez dodatnog teksta.`;
       title: basicData.title || null,
       description: basicData.description || null,
       logo_url: basicData.logo_url || null,
-      brand_name: extracted.brand_name || basicData.title?.split(/[|\-–]/)[0].trim() || null,
+      brand_name: extracted.brand_name || basicData.title?.split(/[|\-â€“]/)[0].trim() || null,
       about: extracted.about || basicData.description || null,
       products: extracted.products || [],
       contact: {
@@ -233,7 +233,7 @@ Vrati SAMO JSON, bez dodatnog teksta.`;
       title: basicData.title || null,
       description: basicData.description || null,
       logo_url: basicData.logo_url || null,
-      brand_name: basicData.title?.split(/[|\-–]/)[0].trim() || null,
+      brand_name: basicData.title?.split(/[|\-â€“]/)[0].trim() || null,
       about: basicData.description || null,
       products: [],
       contact: basicData.contact || {},
@@ -248,7 +248,7 @@ Vrati SAMO JSON, bez dodatnog teksta.`;
 // SAVE TO DATABASE
 // ============================================================
 
-async function saveScrapedData(data: ScrapedData): Promise<void> {
+async function saveScrapedData(data: ScrapedData, projectId: string): Promise<void> {
   // Update brand profile with scraped data
   const [existingProfile] = await q<any>(
     `SELECT profile FROM brand_profiles WHERE project_id = $1`,
@@ -355,7 +355,7 @@ export async function POST(req: Request) {
     });
 
     // Save to database
-    await saveScrapedData(scrapedData);
+    await saveScrapedData(scrapedData, projectId);
 
     return NextResponse.json({
       success: true,
@@ -373,3 +373,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
