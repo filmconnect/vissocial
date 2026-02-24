@@ -1,7 +1,23 @@
+// ============================================================
+// API: /api/instagram/login
+// ============================================================
+// Starts Instagram OAuth flow.
+// V9: Passes project_id in state param so callback knows which project.
+// Cookie should also survive the redirect, but state is a safety net.
+// ============================================================
+
 import { NextResponse } from "next/server";
 import { config } from "@/lib/config";
+import { getProjectId } from "@/lib/projectId";
 
 export async function GET() {
+  // Get (or create) project ID before redirecting to Instagram
+  const projectId = await getProjectId();
+
+  // Encode project_id in the OAuth state parameter
+  // Format: "vissocial:<project_id>"
+  const stateParam = `vissocial:${projectId}`;
+
   const redirectAfterLogin =
     "https://www.instagram.com/oauth/authorize/third_party/?" +
     new URLSearchParams({
@@ -14,7 +30,7 @@ export async function GET() {
         "business_manage_comments",
         "instagram_business_manage_insights"
       ].join(","),
-      state: "vissocial"
+      state: stateParam
     }).toString();
 
   const loginUrl =

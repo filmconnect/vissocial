@@ -4,27 +4,15 @@
 // Kreira ili učitava chat session.
 // UPDATED: Dodana podrška za Step 0 (init) state.
 // UPDATED: Maknuta opcija "Brzi pregled" - samo Spoji IG + Nastavi bez
+// V9: Dynamic project_id from cookie (no more proj_local)
+// V9: Chip types fixed (navigation for "Spoji Instagram")
 // ============================================================
 
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
-
-const PROJECT_ID = "proj_local";
-
-// ============================================================
-// Ensure project exists
-// ============================================================
-async function ensureProject() {
-  const rows = await q<any>(`SELECT id, ig_connected FROM projects WHERE id=$1`, [PROJECT_ID]);
-  if (!rows[0]) {
-    await q(`INSERT INTO projects(id, name) VALUES ($1,'Local Project')`, [PROJECT_ID]);
-    await q(`INSERT INTO brand_profiles(project_id, language, profile) VALUES ($1,'hr','{}'::jsonb) ON CONFLICT DO NOTHING`, [PROJECT_ID]);
-    return { id: PROJECT_ID, ig_connected: false };
-  }
-  return rows[0];
-}
+import { getProjectId } from "@/lib/projectId";
 
 // ============================================================
 // POST /api/chat/session
@@ -32,7 +20,12 @@ async function ensureProject() {
 // ============================================================
 export async function POST() {
   try {
-    const project = await ensureProject();
+    const projectId = await getProjectId();
+
+    // Check IG status
+    const rows = await q<any>(`SELECT id, ig_connected FROM projects WHERE id=$1`, [projectId]);
+    const igConnected = rows[0]?.ig_connected || false;
+
     const id = "chat_" + uuid();
 
     // UVIJEK počni s init stepom - korisnik bira što želi
@@ -42,12 +35,13 @@ export async function POST() {
     log("api:chat:session", "new session created", {
       session_id: id,
       initial_step: initialStep,
-      ig_connected: project.ig_connected
+      ig_connected: igConnected,
+      project_id: projectId,
     });
 
     await q(
       `INSERT INTO chat_sessions(id, project_id, state) VALUES ($1,$2,$3)`,
-      [id, PROJECT_ID, JSON.stringify({ step: initialStep })]
+      [id, projectId, JSON.stringify({ step: initialStep })]
     );
 
     // Initial message depends on state
@@ -55,7 +49,7 @@ export async function POST() {
     let welcomeText: string;
     let chips: any[];
 
-    if (initialStep === "init") {
+    if (!igConnected) {
       // Step 0: Pre-OAuth, offer options
       welcomeText = `Bok! 👋 Ja sam Vissocial, tvoj AI asistent za Instagram sadržaj.
 
@@ -64,9 +58,10 @@ Kako želiš započeti?
 1. **Spoji Instagram** - povezivanje za punu funkcionalnost
 2. **Nastavi bez Instagrama** - ručni upload slika`;
 
+      // V9 FIX: navigation type za Spoji Instagram (ne suggestion!)
       chips = [
-        { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
-        { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
+        { type: "navigation", label: "Spoji Instagram", href: "/settings" },
+        { type: "onboarding_option", label: "Nastavi bez Instagrama", value: "nastavi bez" }
       ];
     } else {
       // Post-OAuth welcome
@@ -102,7 +97,7 @@ Reci mi cilj tvog profila za idući mjesec, pa krećemo s planom.`;
     return NextResponse.json({
       session_id: id,
       messages: mapped,
-      ig_connected: project.ig_connected,
+      ig_connected: igConnected,
       step: initialStep
     });
 
