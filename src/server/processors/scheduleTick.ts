@@ -1,4 +1,4 @@
-// src/server/processors/scheduleTick.ts
+﻿// src/server/processors/scheduleTick.ts
 
 import { shouldRunScheduleTick, markScheduleTickRun } from "@/lib/scheduleDebounce";
 import { q } from "@/lib/db";
@@ -19,11 +19,11 @@ export interface ScheduleTickResult {
 
 export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTickResult> {
   const project_id = data?.project_id;
-  if (!project_id) { log("scheduleTick", "ERROR: no project_id in job data"); return; }
+  if (!project_id) { log("scheduleTick", "ERROR: no project_id in job data"); return {} as ScheduleTickResult; }
   
   log("scheduleTick", "job started", { project_id });
   
-  // ✅ DEBOUNCE CHECK
+  // âœ… DEBOUNCE CHECK
   const shouldRun = await shouldRunScheduleTick();
   
   if (!shouldRun) {
@@ -38,7 +38,7 @@ export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTi
   }
   
   try {
-    // ✅ QUERY SA PROJECT_ID FILTEROM
+    // âœ… QUERY SA PROJECT_ID FILTEROM
     const due = await q<any>(
       `SELECT id, scheduled_at, publish_mode, day
        FROM content_items
@@ -56,7 +56,7 @@ export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTi
       count: due.length
     });
     
-    // ✅ OZNAČI KAO IZVRŠENO čak i ako nema itemova
+    // âœ… OZNAÄŒI KAO IZVRÅ ENO Äak i ako nema itemova
     if (due.length === 0) {
       await markScheduleTickRun();
       
@@ -70,7 +70,7 @@ export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTi
       };
     }
     
-    // ✅ PROCESS ITEMS SA ERROR HANDLING
+    // âœ… PROCESS ITEMS SA ERROR HANDLING
     let scheduled = 0;
     let failed = 0;
     
@@ -99,7 +99,7 @@ export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTi
       }
     }
     
-    // ✅ OZNAČI KAO IZVRŠENO
+    // âœ… OZNAÄŒI KAO IZVRÅ ENO
     await markScheduleTickRun();
     
     log("scheduleTick", "completed", {
