@@ -2,24 +2,24 @@ import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 import { chip } from '@/ui/ChatChip';
 import type { ChatChip } from '@/types/vision';
 
-const PROJECT_ID = "proj_local";
-
-// ============================================================
+// V9: PROJECT_ID removed — now uses getProjectId()
 // JOB COMPLETION WEBHOOK
 // Called by worker when jobs complete
 // ============================================================
 
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   try {
     const body = await req.json();
     const { job_type, project_id, status, result } = body;
 
     log("api:notify", "job notification received", { job_type, project_id, status });
 
-    if (project_id !== PROJECT_ID) {
+    if (project_id !== projectId) {
       return NextResponse.json({ ok: true, skipped: "different project" });
     }
 
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
        WHERE project_id = $1 
        ORDER BY created_at DESC 
        LIMIT 1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     if (!session) {
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
           const [products] = await q<any>(
             `SELECT COUNT(*) as count FROM detected_products 
              WHERE project_id = $1 AND status = 'pending'`,
-            [PROJECT_ID]
+            [projectId]
           );
           
           const productCount = parseInt(products?.count || 0);
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
         const [pending] = await q<any>(
           `SELECT COUNT(*) as count FROM detected_products 
            WHERE project_id = $1 AND status = 'pending'`,
-          [PROJECT_ID]
+          [projectId]
         );
         
         const pendingCount = parseInt(pending?.count || 0);
@@ -189,6 +189,7 @@ export async function POST(req: Request) {
 // ============================================================
 
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   const url = new URL(req.url);
   const session_id = url.searchParams.get("session_id");
   const since = url.searchParams.get("since"); // ISO timestamp

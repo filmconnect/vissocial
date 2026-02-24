@@ -9,19 +9,19 @@ import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
-// ============================================================
+// V9: PROJECT_ID removed — now uses getProjectId()
 // GET - Lista svih proizvoda
 // ============================================================
 export async function GET() {
+  const projectId = await getProjectId();
   try {
     const products = await q<any>(
       `SELECT * FROM products 
        WHERE project_id = $1 
        ORDER BY confirmed DESC, created_at DESC`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     return NextResponse.json({ products });
@@ -39,6 +39,7 @@ export async function GET() {
 // POST - Dodaj novi proizvod
 // ============================================================
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   try {
     const body = await req.json();
 
@@ -55,7 +56,7 @@ export async function POST(req: Request) {
     const existing = await q<any>(
       `SELECT id FROM products 
        WHERE project_id = $1 AND LOWER(name) = LOWER($2)`,
-      [PROJECT_ID, name.trim()]
+      [projectId, name.trim()]
     );
 
     if (existing.length > 0) {
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
        VALUES ($1, $2, $3, $4, $5, true, true)`,
       [
         productId,
-        PROJECT_ID,
+        projectId,
         name.trim(),
         category || "other",
         confidence || 1.0  // Ručno dodani imaju confidence 1.0

@@ -712,9 +712,7 @@ function ChatPageContent() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("label", uploadType);
-      formData.append("project_id", "proj_local");
-
-      const res = await fetch("/api/assets/upload", {
+const res = await fetch("/api/assets/upload", {
         method: "POST",
         body: formData
       });

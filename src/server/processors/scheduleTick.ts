@@ -18,7 +18,8 @@ export interface ScheduleTickResult {
 }
 
 export async function scheduleTick(data?: ScheduleTickInput): Promise<ScheduleTickResult> {
-  const project_id = data?.project_id || "proj_local";
+  const project_id = data?.project_id;
+  if (!project_id) { log("scheduleTick", "ERROR: no project_id in job data"); return; }
   
   log("scheduleTick", "job started", { project_id });
   

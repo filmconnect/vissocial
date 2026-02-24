@@ -7,10 +7,11 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
+// V9: PROJECT_ID removed — now uses getProjectId()
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   try {
     // Get unique pending products grouped by name
     const products = await q<any>(
@@ -28,7 +29,7 @@ export async function GET(req: Request) {
        GROUP BY product_name, category
        ORDER BY detection_count DESC, confidence DESC
        LIMIT 50`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Get sample images for each product

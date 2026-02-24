@@ -9,17 +9,18 @@ import { qBrandRebuild } from "@/lib/jobs";
 import { v4 as uuid } from "uuid";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
+// V9: PROJECT_ID removed — now uses getProjectId()
 export async function POST() {
+  const projectId = await getProjectId();
   try {
     // Provjeri ima li analiziranih postova
     const analyzed = await q<any>(
       `SELECT COUNT(*) as count FROM instagram_analyses ia
        JOIN assets a ON a.id = ia.asset_id
        WHERE a.project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     if (parseInt(analyzed[0]?.count || "0") === 0) {
@@ -39,12 +40,12 @@ export async function POST() {
       `INSERT INTO brand_rebuild_events 
        (id, project_id, trigger_type, status, total_expected, analyses_completed)
        VALUES ($1, $2, 'manual_update', 'pending', 0, 0)`,
-      [eventId, PROJECT_ID]
+      [eventId, projectId]
     );
 
     // Queue job
     await qBrandRebuild.add("brand.rebuild", {
-      project_id: PROJECT_ID,
+      project_id: projectId,
       event_id: eventId,
       trigger: "manual_update"
     });

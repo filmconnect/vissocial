@@ -10,8 +10,9 @@ import { q } from "@/lib/db";
 import { qAnalyze, qBrandRebuild } from "@/lib/jobs";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local"; // TODO: Get from auth
+// V9: PROJECT_ID removed — now uses getProjectId()
 
 // ============================================================
 // POST /api/analyze/trigger
@@ -19,6 +20,7 @@ const PROJECT_ID = "proj_local"; // TODO: Get from auth
 // ============================================================
 
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   try {
     const body = await req.json().catch(() => ({}));
     const { force = false } = body;
@@ -44,7 +46,7 @@ export async function POST(req: Request) {
 
     query += ` ORDER BY a.created_at DESC`;
 
-    const assets = await q<any>(query, [PROJECT_ID]);
+    const assets = await q<any>(query, [projectId]);
 
     if (assets.length === 0) {
       return NextResponse.json({
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
         total_expected, analyses_completed
       )
       VALUES ($1, $2, 'instagram_ingest', 'analyzing', $3, 0)`,
-      [eventId, PROJECT_ID, assets.length]
+      [eventId, projectId, assets.length]
     );
 
     // Queue sve analize
@@ -72,7 +74,7 @@ export async function POST(req: Request) {
       
       await qAnalyze.add("analyze.instagram", {
         asset_id: asset.id,
-        project_id: PROJECT_ID,
+        project_id: projectId,
         image_url: asset.url,
         caption,
         rebuild_event_id: eventId
@@ -106,13 +108,14 @@ export async function POST(req: Request) {
 // ============================================================
 
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   try {
     // Ukupno asseta
     const totalAssets = await q<any>(
       `SELECT COUNT(*) as count 
        FROM assets 
        WHERE project_id = $1 AND source = 'instagram' AND type = 'image'`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Analiziranih
@@ -121,7 +124,7 @@ export async function GET(req: Request) {
        FROM instagram_analyses ia
        JOIN assets a ON a.id = ia.asset_id
        WHERE a.project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Detektiranih proizvoda
@@ -131,7 +134,7 @@ export async function GET(req: Request) {
               SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed
        FROM detected_products
        WHERE project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Zadnji rebuild event
@@ -141,7 +144,7 @@ export async function GET(req: Request) {
        WHERE project_id = $1
        ORDER BY created_at DESC
        LIMIT 1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     return NextResponse.json({

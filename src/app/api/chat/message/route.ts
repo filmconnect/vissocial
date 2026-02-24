@@ -15,10 +15,9 @@ import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { qLLM, qExport, qMetrics } from "@/lib/jobs";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
-// ============================================================
+// V9: PROJECT_ID removed — now uses getProjectId()
 // Types
 // ============================================================
 
@@ -355,7 +354,7 @@ function getNextOnboardingChips(progress: OnboardingProgress, ig_connected: bool
   if (!progress.has_reference_image && !progress.has_products) {
     if (!ig_connected) {
       chips.push(
-        { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+        { type: "navigation", label: "Spoji Instagram", href: "/settings" },
         { type: "suggestion", label: "Uploaj slike", value: "uploaj slike" },
         { type: "suggestion", label: "Unesi web stranicu", value: "web stranica" }
       );
@@ -521,6 +520,7 @@ function estimateFromUsername(username: string): {
 // POST /api/chat/message
 // ============================================================
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   const body = await req.json();
   log("api:chat", "POST /api/chat/message", body);
 
@@ -540,7 +540,7 @@ export async function POST(req: Request) {
   const step = state?.step ?? "init";
 
   // Get project status
-  const project = await q<any>(`SELECT ig_connected FROM projects WHERE id = $1`, [PROJECT_ID]);
+  const project = await q<any>(`SELECT ig_connected FROM projects WHERE id = $1`, [projectId]);
   const ig_connected = project[0]?.ig_connected || false;
 
   log("chat:fsm", "state", { session_id, step, norm, ig_connected });
@@ -556,7 +556,7 @@ export async function POST(req: Request) {
       [JSON.stringify({ ...state, step: "onboarding", ig_connected: true }), session_id]
     );
 
-    const requirements = await checkProgress(PROJECT_ID, { ...state, ig_connected: true });
+    const requirements = await checkProgress(projectId, { ...state, ig_connected: true });
     const chips = getNextOnboardingChips(requirements.progress, true);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -585,7 +585,7 @@ export async function POST(req: Request) {
       [JSON.stringify({ ...state, goal, step: "onboarding" }), session_id]
     );
 
-    const requirements = await checkProgress(PROJECT_ID, { ...state, goal });
+    const requirements = await checkProgress(projectId, { ...state, goal });
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -619,7 +619,7 @@ export async function POST(req: Request) {
       [JSON.stringify({ ...state, profile_type: profileType, step: "onboarding" }), session_id]
     );
 
-    const requirements = await checkProgress(PROJECT_ID, { ...state, profile_type: profileType });
+    const requirements = await checkProgress(projectId, { ...state, profile_type: profileType });
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -644,7 +644,7 @@ export async function POST(req: Request) {
       [JSON.stringify({ ...state, focus, step: "onboarding" }), session_id]
     );
 
-    const requirements = await checkProgress(PROJECT_ID, { ...state, focus });
+    const requirements = await checkProgress(projectId, { ...state, focus });
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -668,10 +668,10 @@ export async function POST(req: Request) {
 
   // Prikaži proizvode
   if (norm.includes("prikaži") && norm.includes("proizvod")) {
-    const pendingProducts = await getPendingProducts(PROJECT_ID);
+    const pendingProducts = await getPendingProducts(projectId);
 
     if (pendingProducts.length === 0) {
-      const requirements = await checkProgress(PROJECT_ID, state);
+      const requirements = await checkProgress(projectId, state);
       const chips = getNextOnboardingChips(requirements.progress, ig_connected);
 
       const a = await pushMessage(
@@ -699,10 +699,10 @@ export async function POST(req: Request) {
   if (norm.includes("potvrdi sve")) {
     await q(
       `UPDATE detected_products SET status = 'confirmed' WHERE project_id = $1 AND status = 'pending'`,
-      [PROJECT_ID]
+      [projectId]
     );
 
-    const requirements = await checkProgress(PROJECT_ID, state);
+    const requirements = await checkProgress(projectId, state);
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -717,7 +717,7 @@ export async function POST(req: Request) {
 
   // Nastavi s generiranjem
   if (norm.includes("nastavi") && (norm.includes("generiranj") || norm.includes("dalje"))) {
-    const requirements = await checkProgress(PROJECT_ID, state);
+    const requirements = await checkProgress(projectId, state);
 
     if (!requirements.canGenerate) {
       const chips = getNextOnboardingChips(requirements.progress, ig_connected);
@@ -755,7 +755,7 @@ export async function POST(req: Request) {
 
   // Generiraj plan
   if (norm.includes("generiraj") || norm.includes("generate")) {
-    const requirements = await checkProgress(PROJECT_ID, state);
+    const requirements = await checkProgress(projectId, state);
     const userConfirmed = norm.includes("sada") || norm.includes("da");
 
     if (!requirements.canGenerate) {
@@ -804,7 +804,7 @@ export async function POST(req: Request) {
     // Execute generation
     const month = new Date().toISOString().slice(0, 7);
     await qLLM.add("plan.generate", {
-      project_id: PROJECT_ID,
+      project_id: projectId,
       month,
       limit: state.horizon === 7 ? 7 : null
     });
@@ -826,7 +826,7 @@ export async function POST(req: Request) {
 
   // Export
   if (norm.includes("export")) {
-    await qExport.add("export.pack", { project_id: PROJECT_ID, approved_only: true });
+    await qExport.add("export.pack", { project_id: projectId, approved_only: true });
     const a = await pushMessage(
       session_id,
       "assistant",
@@ -843,7 +843,7 @@ export async function POST(req: Request) {
         session_id,
         "assistant",
         "✅ Instagram je već povezan! Analiza je u tijeku.\n\nU međuvremenu, odgovori na nekoliko pitanja:",
-        { chips: getNextOnboardingChips((await checkProgress(PROJECT_ID, state)).progress, true) }
+        { chips: getNextOnboardingChips((await checkProgress(projectId, state)).progress, true) }
       );
       return NextResponse.json({ new_messages: [a] });
     }
@@ -950,7 +950,7 @@ export async function POST(req: Request) {
   // Preskoči reference - MUST CHECK BEFORE general upload handler
   if (norm.includes("preskoči") || norm.includes("skip") || 
       (step === "upload_reference" && (norm.includes("dalje") || norm.includes("nastavi")))) {
-    const requirements = await checkProgress(PROJECT_ID, state);
+    const requirements = await checkProgress(projectId, state);
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -980,7 +980,7 @@ export async function POST(req: Request) {
       `SELECT id, url, label, created_at FROM assets 
        WHERE project_id = $1 AND label IN ('style_reference', 'product_reference', 'character_reference')
        ORDER BY label, created_at DESC`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     if (assets.length === 0) {
@@ -1020,7 +1020,7 @@ export async function POST(req: Request) {
       `SELECT label, COUNT(*) as count FROM assets 
        WHERE project_id = $1 AND label IN ('style_reference', 'product_reference', 'character_reference')
        GROUP BY label`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     const refCounts: Record<string, number> = {};
@@ -1073,7 +1073,7 @@ export async function POST(req: Request) {
         [JSON.stringify({ ...state, step: "onboarding", ig_connected: true }), session_id]
       );
 
-      const requirements = await checkProgress(PROJECT_ID, { ...state, ig_connected: true });
+      const requirements = await checkProgress(projectId, { ...state, ig_connected: true });
       const chips = getNextOnboardingChips(requirements.progress, true);
       const progressText = buildProgressIndicator(requirements.progress);
 
@@ -1095,7 +1095,7 @@ export async function POST(req: Request) {
           [JSON.stringify({ ...state, step: "onboarding" }), session_id]
         );
 
-        const requirements = await checkProgress(PROJECT_ID, state);
+        const requirements = await checkProgress(projectId, state);
         const chips = getNextOnboardingChips(requirements.progress, true);
         const progressText = buildProgressIndicator(requirements.progress);
 
@@ -1154,7 +1154,7 @@ export async function POST(req: Request) {
       "Odaberi kako želiš započeti:",
       {
         chips: [
-          { type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" },
+          { type: "navigation", label: "Spoji Instagram", href: "/settings" },
           { type: "suggestion", label: "Nastavi bez Instagrama", value: "nastavi bez" }
         ]
       }
@@ -1233,7 +1233,7 @@ export async function POST(req: Request) {
 
     log("chat:website", "scraping_complete", { url, success: scrapedData.success });
 
-    const requirements = await checkProgress(PROJECT_ID, { ...state, website_url: url });
+    const requirements = await checkProgress(projectId, { ...state, website_url: url });
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -1274,7 +1274,7 @@ export async function POST(req: Request) {
         [JSON.stringify({ ...state, step: "onboarding" }), session_id]
       );
 
-      const requirements = await checkProgress(PROJECT_ID, state);
+      const requirements = await checkProgress(projectId, state);
       const chips = getNextOnboardingChips(requirements.progress, ig_connected);
       const progressText = buildProgressIndicator(requirements.progress);
 
@@ -1293,7 +1293,7 @@ export async function POST(req: Request) {
   // STEP: ONBOARDING
   // =========================
   if (step === "onboarding" || step === "ready_to_generate" || step === "pre_generate") {
-    const requirements = await checkProgress(PROJECT_ID, state);
+    const requirements = await checkProgress(projectId, state);
     const chips = getNextOnboardingChips(requirements.progress, ig_connected);
     const progressText = buildProgressIndicator(requirements.progress);
 
@@ -1317,7 +1317,7 @@ export async function POST(req: Request) {
   // =========================
   // DEFAULT
   // =========================
-  const requirements = await checkProgress(PROJECT_ID, state);
+  const requirements = await checkProgress(projectId, state);
   const chips = getNextOnboardingChips(requirements.progress, ig_connected);
 
   const a = await pushMessage(
@@ -1361,7 +1361,7 @@ async function handleScraping(
       ];
 
       if (!ig_connected) {
-        chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+        chips.push({ type: "navigation", label: "Spoji Instagram", href: "/settings" });
       }
     } else {
       responseText = `📊 **Analiza @${username}**\n\n`;
@@ -1376,7 +1376,7 @@ async function handleScraping(
       ];
 
       if (!ig_connected) {
-        chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+        chips.push({ type: "navigation", label: "Spoji Instagram", href: "/settings" });
       }
     }
   } else {
@@ -1386,7 +1386,7 @@ async function handleScraping(
     ];
 
     if (!ig_connected) {
-      chips.push({ type: "suggestion", label: "Spoji Instagram", value: "spoji instagram" });
+      chips.push({ type: "navigation", label: "Spoji Instagram", href: "/settings" });
     }
 
     chips.push({ type: "suggestion", label: "Nastavi bez analize", value: "nastavi bez" });

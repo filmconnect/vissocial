@@ -7,17 +7,19 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local"; // TODO: Get from auth
+// V9: PROJECT_ID removed — now uses getProjectId()
 
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   try {
     // Ukupno IG slika
     const totalAssets = await q<any>(
       `SELECT COUNT(*) as count 
        FROM assets 
        WHERE project_id = $1 AND source = 'instagram' AND type = 'image'`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Analiziranih
@@ -26,7 +28,7 @@ export async function GET(req: Request) {
        FROM instagram_analyses ia
        JOIN assets a ON a.id = ia.asset_id
        WHERE a.project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Pending (čeka analizu)
@@ -39,7 +41,7 @@ export async function GET(req: Request) {
          AND NOT EXISTS (
            SELECT 1 FROM instagram_analyses ia WHERE ia.asset_id = a.id
          )`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Detektirani proizvodi
@@ -51,7 +53,7 @@ export async function GET(req: Request) {
          SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected
        FROM detected_products
        WHERE project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Unique proizvodi (grupirani po imenu)
@@ -62,7 +64,7 @@ export async function GET(req: Request) {
        GROUP BY product_name, category
        ORDER BY frequency DESC, confidence DESC
        LIMIT 20`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Zadnji rebuild eventi
@@ -73,7 +75,7 @@ export async function GET(req: Request) {
        WHERE project_id = $1
        ORDER BY created_at DESC
        LIMIT 5`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Brand profile status
@@ -85,7 +87,7 @@ export async function GET(req: Request) {
          jsonb_array_length(COALESCE(profile->'products', '[]'::jsonb)) as products_in_profile
        FROM brand_profiles
        WHERE project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     const total = parseInt(totalAssets[0]?.count || "0");

@@ -1,12 +1,12 @@
--- ============================================================
+﻿-- ============================================================
 -- VISSOCIAL - COMPLETE DATABASE SCHEMA
 -- ============================================================
 -- Version: 1.0.0
 -- Date: 2026-02-03
 -- Description: Konsolidirana migracija sa svim tablicama
 -- 
--- UPUTE ZA KORIŠTENJE:
--- 1. Obriši sve iz src/db/migrations/ (ili ih premjesti u backup/)
+-- UPUTE ZA KORIÅ TENJE:
+-- 1. ObriÅ¡i sve iz src/db/migrations/ (ili ih premjesti u backup/)
 -- 2. Kopiraj ovu datoteku kao src/db/migrations/001_complete_schema.sql
 -- 3. Pokreni: npm run migrate
 -- ============================================================
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS assets (
 CREATE INDEX IF NOT EXISTS idx_assets_project ON assets(project_id);
 CREATE INDEX IF NOT EXISTS idx_assets_source ON assets(source);
 
--- Products - potvrđeni proizvodi
+-- Products - potvrÄ‘eni proizvodi
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
@@ -76,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_products_project ON products(project_id);
 -- 2. CONTENT GENERATION TABLES
 -- ============================================================
 
--- Content packs - mjesečni paketi
+-- Content packs - mjeseÄni paketi
 CREATE TABLE IF NOT EXISTS content_packs (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS content_packs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Content items - pojedinačne objave
+-- Content items - pojedinaÄne objave
 CREATE TABLE IF NOT EXISTS content_items (
   id TEXT PRIMARY KEY,
   content_pack_id TEXT REFERENCES content_packs(id) ON DELETE CASCADE,
@@ -412,7 +412,7 @@ ON CONFLICT (id) DO NOTHING;
 
 
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_external_id ON assets(external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_project_external_id ON assets(project_id, external_id) WHERE external_id IS NOT NULL;
 
 ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
 ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram_vision';
@@ -439,3 +439,4 @@ COMMIT;
 -- WHERE table_schema = 'public' ORDER BY table_name;
 --
 -- SELECT COUNT(*) as bandit_arms_count FROM bandit_arms;
+

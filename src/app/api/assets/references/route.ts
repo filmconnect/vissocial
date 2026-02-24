@@ -7,10 +7,11 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const project_id = searchParams.get("project_id") || "proj_local";
+  const project_id = await getProjectId();
 
   try {
     const assets = await q<any>(

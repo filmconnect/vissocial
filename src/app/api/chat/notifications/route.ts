@@ -9,14 +9,14 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
-// ============================================================
+// V9: PROJECT_ID removed — now uses getProjectId()
 // GET /api/chat/notifications
 // Dohvaća nepročitane notifikacije za danu session
 // ============================================================
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   const url = new URL(req.url);
   const session_id = url.searchParams.get("session_id");
 
@@ -70,6 +70,7 @@ export async function GET(req: Request) {
 // Markira notifikaciju kao pročitanu ili izvršava akciju
 // ============================================================
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   try {
     const body = await req.json();
     const { notification_id, action } = body;

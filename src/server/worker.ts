@@ -1,8 +1,11 @@
+// Auto-load .env files (works locally, silently skips on production)
+import 'dotenv/config';
+
 // ============================================================
 // WORKER.TS - BullMQ Workers (Production Debug Edition)
 // ============================================================
 
-// Debug env vars — this runs BEFORE any imports
+// Debug env vars â€” this runs BEFORE any imports
 console.log("=== WORKER ENV DEBUG ===");
 console.log("REDIS_URL:", process.env.REDIS_URL ? process.env.REDIS_URL.replace(/:[^:@]+@/, ":***@") : "MISSING");
 console.log("NODE_ENV:", process.env.NODE_ENV);
@@ -32,7 +35,7 @@ if (process.env.NODE_ENV !== "production" && !process.env.RAILWAY_ENVIRONMENT) {
 // HEALTH CHECK SERVER - must be early so Railway doesn't kill us
 // ============================================================
 import { createServer } from "http";
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 let workerHealthy = true;
 let redisConnected = false;
@@ -125,7 +128,7 @@ redisConnection.on("reconnecting", () => {
   log("redis", "reconnecting");
 });
 
-// BullMQ connection config — use URL string, let BullMQ handle it
+// BullMQ connection config â€” use URL string, let BullMQ handle it
 const connection = { url: config.redisUrl };
 
 const baseWorkerConfig = {
@@ -284,7 +287,7 @@ new Worker(
     }
     await qPublish.add(
       "schedule.tick",
-      { project_id: "proj_local" },
+      { project_id: "__tick__" }, // V9: scheduler will iterate active projects
       {
         repeat: { every: 5 * 60 * 1000 },
         jobId: "schedule-tick-main",

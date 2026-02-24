@@ -2,18 +2,19 @@ import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import JSZip from "jszip";
 import { stringify } from "csv-stringify/sync";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID="proj_local";
-
+// V9: PROJECT_ID removed — now uses getProjectId()
 function extractUrl(latest_render:any):string|null{
   try{ if(!latest_render) return null; const o=typeof latest_render==="string"?JSON.parse(latest_render):latest_render; return o?.url||null; }catch{return null;}
 }
 
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   const body = await req.json();
   const approved_only = !!body.approved_only;
 
-  const pack = (await q<any>(`SELECT * FROM content_packs WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1`, [PROJECT_ID]))[0];
+  const pack = (await q<any>(`SELECT * FROM content_packs WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1`, [projectId]))[0];
   if(!pack) return NextResponse.json({ error:"no_pack" }, {status:400});
 
   const items = await q<any>(`

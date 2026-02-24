@@ -8,24 +8,24 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
-// ============================================================
+// V9: PROJECT_ID removed — now uses getProjectId()
 // GET - Dohvati brand profil
 // ============================================================
 export async function GET() {
+  const projectId = await getProjectId();
   try {
     // Dohvati brand profil
     const profileRow = await q<any>(
       `SELECT profile FROM brand_profiles WHERE project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Dohvati projekt info
     const project = await q<any>(
       `SELECT ig_connected, ig_user_id FROM projects WHERE id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Dohvati broj analiziranih postova
@@ -33,7 +33,7 @@ export async function GET() {
       `SELECT COUNT(*) as count FROM instagram_analyses ia
        JOIN assets a ON a.id = ia.asset_id
        WHERE a.project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Dohvati pending proizvode (iz detected_products)
@@ -41,7 +41,7 @@ export async function GET() {
       `SELECT COUNT(DISTINCT product_name) as count 
        FROM detected_products 
        WHERE project_id = $1 AND status = 'pending'`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Dohvati confirmed proizvode (iz products tablice) - PUNA LISTA
@@ -57,7 +57,7 @@ export async function GET() {
        ) dp ON dp.product_name = p.name AND dp.project_id = p.project_id
        WHERE p.project_id = $1 AND p.confirmed = true
        ORDER BY frequency DESC, p.created_at DESC`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Formatiraj proizvode za response
@@ -77,7 +77,7 @@ export async function GET() {
        WHERE project_id = $1 
        AND label IN ('style_reference', 'product_reference', 'character_reference')
        GROUP BY label`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     const refCounts: Record<string, number> = {
@@ -96,7 +96,7 @@ export async function GET() {
        AND label IN ('style_reference', 'product_reference', 'character_reference')
        ORDER BY created_at DESC
        LIMIT 9`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     // Grupiraj po tipu
@@ -116,7 +116,7 @@ export async function GET() {
       `SELECT completed_at FROM brand_rebuild_events 
        WHERE project_id = $1 AND status = 'completed'
        ORDER BY completed_at DESC LIMIT 1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     log("api:profile", "fetched", {
@@ -150,13 +150,14 @@ export async function GET() {
 // PATCH - Spremi izmjene profila
 // ============================================================
 export async function PATCH(req: Request) {
+  const projectId = await getProjectId();
   try {
     const updates = await req.json();
 
     // Dohvati postojeći profil
     const existing = await q<any>(
       `SELECT profile FROM brand_profiles WHERE project_id = $1`,
-      [PROJECT_ID]
+      [projectId]
     );
 
     const currentProfile = existing[0]?.profile || {};
@@ -207,7 +208,7 @@ export async function PATCH(req: Request) {
        VALUES ($1, 'hr', $2)
        ON CONFLICT (project_id) 
        DO UPDATE SET profile = $2`,
-      [PROJECT_ID, JSON.stringify(updatedProfile)]
+      [projectId, JSON.stringify(updatedProfile)]
     );
 
     log("api:profile", "updated", {

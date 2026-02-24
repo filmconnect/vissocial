@@ -11,6 +11,7 @@ import { makePublicUrl } from "@/lib/makePublicUrl";
 import { q } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const label = formData.get("label") as string;
-    const project_id = (formData.get("project_id") as string) || "proj_local";
+    const project_id = await getProjectId();
 
     log("api:assets:upload", "request received", {
       label,

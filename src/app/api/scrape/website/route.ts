@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { q } from "@/lib/db";
 import { log } from "@/lib/logger";
+import { getProjectId } from "@/lib/projectId";
 import { v4 as uuid } from "uuid";
 import OpenAI from "openai";
 import { config } from "@/lib/config";
 
-const PROJECT_ID = "proj_local";
-
+// V9: PROJECT_ID removed — now uses getProjectId()
 const openai = new OpenAI({ apiKey: config.openaiKey });
 
 // ============================================================
@@ -252,7 +252,7 @@ async function saveScrapedData(data: ScrapedData): Promise<void> {
   // Update brand profile with scraped data
   const [existingProfile] = await q<any>(
     `SELECT profile FROM brand_profiles WHERE project_id = $1`,
-    [PROJECT_ID]
+    [projectId]
   );
 
   const currentProfile = existingProfile?.profile || {};
@@ -277,7 +277,7 @@ async function saveScrapedData(data: ScrapedData): Promise<void> {
 
   await q(
     `UPDATE brand_profiles SET profile = $1, updated_at = NOW() WHERE project_id = $2`,
-    [JSON.stringify(updatedProfile), PROJECT_ID]
+    [JSON.stringify(updatedProfile), projectId]
   );
 
   // Save discovered products
@@ -290,7 +290,7 @@ async function saveScrapedData(data: ScrapedData): Promise<void> {
        ON CONFLICT DO NOTHING`,
       [
         productId,
-        PROJECT_ID,
+        projectId,
         product.name,
         product.category || "other",
         0.7, // Lower confidence for web-scraped products
@@ -303,7 +303,7 @@ async function saveScrapedData(data: ScrapedData): Promise<void> {
   if (data.brand_name) {
     await q(
       `UPDATE projects SET name = $1, updated_at = NOW() WHERE id = $2 AND (name IS NULL OR name = 'Local Project')`,
-      [data.brand_name, PROJECT_ID]
+      [data.brand_name, projectId]
     );
   }
 
@@ -319,6 +319,7 @@ async function saveScrapedData(data: ScrapedData): Promise<void> {
 // ============================================================
 
 export async function POST(req: Request) {
+  const projectId = await getProjectId();
   try {
     const body = await req.json();
     const { url } = body;

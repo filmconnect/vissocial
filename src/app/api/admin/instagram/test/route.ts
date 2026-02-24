@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 import { isAdmin } from "@/lib/adminAuth";
 import { q } from "@/lib/db";
 import { graphGET } from "@/lib/instagram";
+import { getProjectId } from "@/lib/projectId";
 
-const PROJECT_ID = "proj_local";
-
+// V9: PROJECT_ID removed — now uses getProjectId()
 export async function GET(req: Request) {
+  const projectId = await getProjectId();
   if (!isAdmin(req)) {
     return NextResponse.json(
       { error: "Forbidden" },
@@ -15,7 +16,7 @@ export async function GET(req: Request) {
 
   const rows = await q(
     `SELECT meta_access_token, meta_token_expires_at FROM projects WHERE id=$1`,
-    [PROJECT_ID]
+    [projectId]
   );
 
   const token = rows?.[0]?.meta_access_token;
