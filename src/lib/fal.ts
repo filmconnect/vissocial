@@ -1,5 +1,5 @@
-// ============================================================
-// fal.ts — fal.ai Image Generation with Smart Model Routing
+﻿// ============================================================
+// fal.ts â€” fal.ai Image Generation with Smart Model Routing
 // ============================================================
 // V9: Enhanced production logging with timing and error details
 // ============================================================
@@ -145,6 +145,7 @@ async function falEditImage(params: FalEditParams): Promise<FalResult> {
   const body: Record<string, any> = {
     prompt: params.prompt,
     image_urls: params.image_urls,
+    enable_safety_checker: false,
   };
 
   if (params.negative_prompt) {
@@ -220,3 +221,4 @@ function extractImageUrl(data: any): string {
 
   return url;
 }
+
