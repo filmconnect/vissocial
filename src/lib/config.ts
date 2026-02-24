@@ -51,7 +51,7 @@ export const config = {
     scopes: process.env.META_SCOPES || "instagram_business_basic, instagram_business_content_publish, instagram_business_manage_comments,instagram_business_manage_messages",
   },
   dev: {
-    generateLimit: Number(process.env.DEV_GENERATE_LIMIT || 30),
+    generateLimit: Number(process.env.DEV_GENERATE_LIMIT || 3),
     allowLimitOverride: (process.env.DEV_ALLOW_LIMIT_OVERRIDE || "false") === "true",
   },
   s3: {
