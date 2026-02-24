@@ -1,71 +1,65 @@
-# Roadmap
+# Vissocial — Roadmap
 
-> **Zadnje ažuriranje:** 7. veljače 2026
+> Zadnje ažuriranje: 24. veljače 2026
 
 ## ✅ Completed
 
-### Phase 0: Foundation
-- [x] Database schema (projects, assets, products, content)
-- [x] BullMQ queue setup
-- [x] MinIO storage integration
-- [x] Basic chat UI
+### Phase 1: Foundation (V1)
+- [x] Next.js 14 + TypeScript setup
+- [x] PostgreSQL + BullMQ + Redis
+- [x] Instagram OAuth (Meta Graph API)
+- [x] Chat FSM (init → onboarding → generation)
+- [x] Vision API analysis pipeline
+- [x] fal.ai image generation (Flux2)
+- [x] Calendar UI
 
-### Phase 1: Instagram + Vision
-- [x] Instagram OAuth flow
-- [x] Media ingest (25 posts)
-- [x] GPT-4 Vision analysis
-- [x] Product detection
-- [x] Brand profile aggregation
-- [x] Base64 encoding for dev (ngrok timeout fix)
+### Phase 2: Notifications & Content (V2)
+- [x] Async notification system (polling)
+- [x] ChatChip component with icons
+- [x] Content plan generation (Thompson sampling)
+- [x] Export (ZIP with CSV + media)
 
-### Phase 2: Content Generation
-- [x] ChatGPT content planning
-- [x] Flux2 image rendering (fal.ai)
-- [x] Multi-reference support
-- [x] Calendar/editor UI
+### Phase 3: Design System (V3)
+- [x] Contently-style UI migration
+- [x] ChatBubble, ChatLayout, AppHeader components
+- [x] Profile Analysis page (/analyze/[handle])
+- [x] Dual-layer navigation
+- [x] Lavender gradient, AI sparkle avatar
+- [x] Progressive loading animations
 
-### Phase 3: Chat UX
-- [x] Async notifications system
-- [x] chat_notifications table
-- [x] Frontend polling (5s)
-- [x] Worker lockDuration fix
-- [x] ChatChip icons (☐ before, ✅ after) — V7
-- [x] Product confirm vizualni feedback — V7
-- [x] Init step simplifikacija (2 opcije) — V7
+### Phase 4: Pipeline Fixes (V7)
+- [x] Product confirm visual feedback (green checkmark)
+- [x] Database: assets.external_id column
+- [x] Database: detected_products.analysis_id + source
+- [x] Storage: Vercel Blob allowOverwrite fix
+- [x] Init step simplification (2 options only)
 
-### Phase 3.5: Design System Migration (V3 — NOVO)
-- [x] Design tokens (boje, fontovi, spacing)
-- [x] UI komponente (ChatBubble, ChatLayout, Button, Card, Chip, Avatar, Icons, Input)
-- [x] Lavender gradient pozadina
-- [x] AI avatar (sparkle, NE robot)
-- [x] Contently-style landing page
-- [x] Dvoslojna navigacija (ChatLayout + AppHeader)
-- [x] Tailwind custom classes i boje
+### Phase 5: Production Deployment (V8) — Feb 24, 2026
+- [x] Vercel (frontend) + Railway (worker) deployment
+- [x] Neon PostgreSQL with SSL configuration
+- [x] Database SSL fix (db.ts — sslmode=require)
+- [x] fal.ai image_urls limit fix (max 4 references)
+- [x] Vercel API caching fix (force-dynamic on content/latest)
+- [x] Storage URL fix (uploadedUrl instead of s3Key for Vercel Blob)
+- [x] APP_URL trailing slash/newline fix
+- [x] BLOB_READ_WRITE_TOKEN on Railway
+- [x] Missing production DB columns (chat_notifications.project_id, instagram_analyses.created_at/project_id)
+- [x] Redis connection monitoring (ioredis)
+- [x] BullMQ render lock duration (180s for fal.ai)
+- [x] Debug endpoints (pipeline-status, clean-failed, clean-old-packs)
+- [x] Health check endpoint (/health)
+- [x] Worker logging enabled in production
+- [x] Full pipeline verified: OAuth → Ingest → Analyze → Brand Rebuild → Notification → Plan → Render → Calendar
 
-### Phase 3.6: Profile Analysis (V3 — NOVO)
-- [x] /analyze/[handle] stranica
-- [x] POST /api/analyze endpoint (scrape + GPT-4o-mini)
-- [x] Progressive loading (skeleton states)
-- [x] Error handling (timeout, network, not_found)
-- [x] from=analyze → /chat integration
-- [x] localStorage bridge za kontekst passing
+## 🔄 In Progress
 
-### Phase 3.7: Database & Storage Fixes (V7)
-- [x] assets.external_id kolona (duplicate detection)
-- [x] detected_products.analysis_id + source kolone
-- [x] Vercel Blob allowOverwrite: true (re-ingest fix)
-- [x] End-to-end pipeline verificiran
+### Production Stabilization
+- [ ] DEV_GENERATE_LIMIT reliable enforcement
+- [ ] Database migration system (replace manual ALTER TABLE)
+- [ ] Production monitoring & alerting
+- [ ] BLOB_READ_WRITE_TOKEN rotation (token shared in chat — needs rotation)
 
-## 🚧 In Progress
-
-### Phase 4: Polish & Cleanup
-- [ ] Error handling poboljšanja na svim stranicama
-- [ ] Toast notifikacije za upload success/error
-- [ ] Step indicator dinamičko ažuriranje
-- [ ] Cleanup: obrisati Card.tsx, Badge.tsx ako se ne koriste
-- [ ] Cleanup: obrisati ChipButton iz page.tsx
-
-### Phase 4.5: Profile Screen Enhancement
+### Brand Profile & Products
 - [ ] /profile stranica s brand editing
 - [ ] Visual style editing
 - [ ] Product management (add/remove/edit)
@@ -73,31 +67,42 @@
 
 ## 📋 Planned
 
-### Phase 5: Publishing
+### Phase 6: Publishing
 - [ ] Real posting scheduler UI
 - [ ] Queue status dashboard
 - [ ] Retry failed posts
 - [ ] S3 signed URLs za export
 
-### Phase 6: Multi-platform
+### Phase 7: Multi-platform
 - [ ] Platform abstraction layer
 - [ ] TikTok integration
 - [ ] Facebook Page posting
 - [ ] LinkedIn (later)
 
-### Phase 7: Video
+### Phase 8: Video
 - [ ] video.generate queue
 - [ ] Luma/Runway adapters
 - [ ] Image-to-motion
 - [ ] Captions overlay
 
-### Phase 8: Enterprise
+### Phase 9: Enterprise
 - [ ] Multi-tenant auth
 - [ ] LoRA training pipeline
 - [ ] Brand safety rules
 - [ ] Logo protection
+- [ ] Shopify integration
 
 ## Known Issues
+
+### Resolved (V8 — Production)
+- ~~SSL connection error on Neon~~ → Fixed (db.ts SSL config)
+- ~~fal.ai 422: image_urls > 4~~ → Fixed (prioritizeRefs with cap)
+- ~~Calendar empty despite renders~~ → Fixed (force-dynamic)
+- ~~Vision API invalid_image_url~~ → Fixed (use uploadedUrl not s3Key)
+- ~~APP_URL newline in Railway~~ → Fixed (cleaned variable)
+- ~~BLOB_READ_WRITE_TOKEN missing on Railway~~ → Fixed (added to variables)
+- ~~chat_notifications.project_id missing~~ → Fixed (ALTER TABLE)
+- ~~instagram_analyses.created_at/project_id missing~~ → Fixed (ALTER TABLE)
 
 ### Resolved (V7)
 - ~~planGenerate.ts column error~~ → Fixed (arm_id → id)
@@ -108,22 +113,25 @@
 - ~~detected_products.analysis_id missing~~ → Fixed (ALTER TABLE)
 
 ### Open — Medium
-1. **Notifications table** — `column "title" does not exist` na nekim upitima
-   - Database schema mismatch, treba ALTER TABLE
+1. **DEV_GENERATE_LIMIT** — Set to 3 in Railway but may not take effect reliably
+   - Config reads from env but worker may cache old value
+2. **Redis ECONNRESET** — Railway Redis proxy occasionally drops connections
+   - Worker auto-reconnects, not critical but noisy in logs
 
 ### Open — Low
 1. **Badge komponenta** — ne postoji u novom design sistemu
-   - Stranice koje koriste Badge trebaju migraciju na inline span
 2. **scrape_input/scrape_complete stepovi** — postoje u kodu ali se ne nude iz init-a
-   - Kandidat za cleanup u budućoj sesiji
 
-## Branch Strategy
+## Deployment Architecture
 
-| Branch | Status | Opis |
-|--------|--------|------|
-| `main` | Stabilno | Production-ready kod |
-| `develop` | Development | Integration branch |
-| `feature/design_initial` | **Aktivni** | V3 Design System + V7 Fixes |
+| Component | Platform | Auto-deploy |
+|-----------|----------|-------------|
+| Frontend (Next.js) | Vercel | ✅ GitHub main |
+| Worker (BullMQ) | Railway | ✅ GitHub main |
+| Database | Neon | N/A |
+| Redis | Railway | N/A |
+| Storage | Vercel Blob | N/A |
+| Image Gen | fal.ai | N/A |
 
 ## Version History
 
@@ -131,5 +139,6 @@
 |---------|-------|------------|
 | V1 | Jan 2026 | Foundation, Instagram OAuth, Vision |
 | V2 | Jan 2026 | Content generation, Calendar, Notifications |
-| V3 | Feb 2026 | Design system migration, Profile Analysis |
-| V7 Fixes | Feb 2026 | Database fixes, Product confirm UI, Pipeline verification |
+| V3 | Feb 7, 2026 | Design system migration, Profile Analysis |
+| V7 | Feb 7, 2026 | Database fixes, Product confirm UI |
+| V8 | Feb 24, 2026 | **Production deployment**, SSL, Storage URL, fal.ai limit |

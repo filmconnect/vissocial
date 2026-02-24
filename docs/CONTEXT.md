@@ -2,8 +2,8 @@
 
 > **NAPOMENA:** Ovaj dokument služi kao autoritativni izvor znanja o Vissocial projektu. U slučaju proturječja s project knowledge ili drugim izvorima, **ovaj dokument ima prioritet**.
 > 
-> **Verzija:** 3.0 (Ažurirano: 7. veljače 2026)
-> **Branch:** `feature/design_initial` (aktivni development)
+> **Verzija:** 4.0 (Ažurirano: 24. veljače 2026)
+> **Branch:** `main` (production deployment)
 > **GitHub:** Projekt je spojen s GitHub repozitorijem - kod se redovito sync-a
 
 ---
@@ -13,24 +13,44 @@
 **Vissocial** je AI-powered Instagram content management platforma s chat-first sučeljem. Korisnik kroz razgovor s AI asistentom prolazi onboarding, analizira svoj brand, potvrđuje proizvode i generira sadržaj za Instagram.
 
 ### 1.1 Tech Stack
-- **Frontend:** Next.js 14, TypeScript, Tailwind CSS
-- **Backend:** Next.js API Routes, BullMQ background workers
-- **Database:** PostgreSQL
-- **Storage:** MinIO (S3-compatible, port **9100**) / Vercel Blob (production)
-- **Queue:** BullMQ + Redis na portu **6380** (NE 6379!)
+- **Frontend:** Next.js 14, TypeScript, Tailwind CSS → **Vercel** (production)
+- **Backend:** Next.js API Routes + BullMQ background worker → **Railway** (production)
+- **Database:** PostgreSQL → **Neon** (production, zahtijeva SSL)
+- **Storage:** MinIO (S3-compatible, port **9100** local) / **Vercel Blob** (production)
+- **Queue:** BullMQ + Redis → **Railway Redis** (production)
 - **AI:** 
   - GPT-4 Vision za analizu slika
   - GPT-4o-mini za brand analizu (/api/analyze)
   - ChatGPT za generiranje sadržaja
-  - fal.ai (Flux2) za generiranje slika
+  - fal.ai (Flux2) za generiranje slika — **max 4 image_urls po requestu**
 - **Project ID:** `proj_local` (hardkodirano za development)
 
-### 1.2 Lokacija koda
+### 1.2 Production Infrastruktura
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Vercel     │     │   Railway     │     │    Neon      │
+│  (Frontend)  │────▶│  (Worker)     │────▶│ (PostgreSQL) │
+│  Next.js API │     │  BullMQ jobs  │     │  SSL req.    │
+└─────────────┘     └──────────────┘     └─────────────┘
+       │                    │
+       │                    ▼
+       │            ┌──────────────┐
+       │            │ Railway Redis│
+       │            └──────────────┘
+       ▼
+┌─────────────┐     ┌──────────────┐
+│ Vercel Blob │     │   fal.ai     │
+│  (Storage)  │     │  (Flux2)     │
+└─────────────┘     └──────────────┘
+```
+
+### 1.3 Lokacija koda
 ```
 C:\Users\Velo\source\vissocial_chat\vissocial_app\
 ```
 
-### 1.3 Design System (V2 — Contently stil)
+### 1.4 Design System (V3 — Contently stil)
 - **Boje:** Primary (žuta #FFCA28), Secondary (lavender #F8F7FF)
 - **Font:** Inter (Google Fonts)
 - **Avatar:** Sparkle/star gradient (NE robot)
@@ -47,7 +67,7 @@ C:\Users\Velo\source\vissocial_chat\vissocial_app\
 │                         VISSOCIAL USER FLOW                              │
 └─────────────────────────────────────────────────────────────────────────┘
 
-[LANDING PAGE] ──► Korisnik unosi @handle
+[LANDING PAGE] ───► Korisnik unosi @handle
         │
         ▼
 [STEP 1: PROFILE ANALYSIS] (/analyze/[handle])
@@ -55,14 +75,14 @@ C:\Users\Velo\source\vissocial_chat\vissocial_app\
         │   - Prikazuje: Company, Services, Tone, Audience, Language
         │   - USP Analysis + Recommended Focus
         │
-        ├──► "Sounds good → Continue" ──► /chat?from=analyze
+        ├───► "Sounds good → Continue" ───► /chat?from=analyze
         │
         ▼
 [STEP 2: CONNECT INSTAGRAM] (/chat)
         │   - Init: 2 opcije (Spoji IG, Nastavi bez)
         │   - OAuth flow ili manual input
         │
-        ├──► OAuth success ──► Instagram Ingest ──► Vision Analysis
+        ├───► OAuth success ───► Instagram Ingest ───► Vision Analysis
         │
         ▼
 [STEP 3: TAILOR 30-DAY PLAN] (/chat - onboarding)
@@ -98,8 +118,6 @@ C:\Users\Velo\source\vissocial_chat\vissocial_app\
 | `ready_to_generate` | Potvrda generiranja | generating |
 | `generating` | U tijeku | calendar |
 
-**NAPOMENA (V7):** "Brzi pregled profila" uklonjen iz init stepa. Korisnici koji žele preview idu kroz /analyze stranicu.
-
 ### 2.3 Init Chips (V7 — samo 2 opcije)
 
 ```typescript
@@ -125,41 +143,7 @@ chips: [
 | `/profile` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
 | `/calendar` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
 
-### 3.2 ChatLayout.tsx — Za /chat i /analyze
-
-```typescript
-// src/ui/ChatLayout.tsx
-interface ChatLayoutProps {
-  children: React.ReactNode;
-  currentStep?: number;      // 1-6
-  totalSteps?: number;       // default 6
-  stepTitle?: string;        // "Profile analysis", "Connect Instagram"...
-  showSteps?: boolean;
-  onNewSession?: () => void; // "Nova sesija" button
-}
-```
-
-**Sadrži:**
-- Fixed header sa Vissocial logom
-- NAV_ITEMS linkovi (Chat, Calendar, Profile, Settings)
-- Step indicator ("Step 1 of 6")
-- "Nova sesija" button (optional)
-- Lavender gradient pozadina
-
-### 3.3 AppHeader.tsx — Za ostale stranice
-
-```typescript
-// src/ui/AppHeader.tsx
-// Client component s usePathname() za active state
-// Vraća null na "/" i "/chat" (te stranice imaju svoj header)
-```
-
-**Stilovi:**
-- Background: `lavender-100/95` + `backdrop-blur-md`
-- Active link: `gray-900` text, `white/60` bg
-- Inactive: `gray-500` text → hover `gray-700`
-
-### 3.4 NAV_ITEMS (dijeljeno)
+### 3.2 NAV_ITEMS (dijeljeno)
 
 ```typescript
 const NAV_ITEMS = [
@@ -172,18 +156,9 @@ const NAV_ITEMS = [
 
 ---
 
-## 4. PROFILE ANALYSIS STRANICA (V3 — NOVO)
+## 4. PROFILE ANALYSIS STRANICA (V3)
 
-### 4.1 Arhitektura
-
-```
-src/app/analyze/
-├── [handle]/
-│   ├── page.tsx                  ← Server component (metadata)
-│   └── ProfileAnalysisClient.tsx ← Client component (UI + API)
-```
-
-### 4.2 API Endpoint
+### 4.1 API Endpoint
 
 ```
 POST /api/analyze
@@ -198,34 +173,6 @@ POST /api/analyze
     }
   }
   Timeout: 15s (GPT: 10s)
-```
-
-### 4.3 ProfileAnalysisClient States
-
-1. **Loading:** Skeleton animacije (HeaderSkeleton, QuickFactsSkeleton, USPSkeleton)
-2. **Error:** 4 tipa (timeout, network, not_found, generic) s retry buttonom
-3. **Success:** Progressive reveal s FadeInSection (staggered delays 200-800ms)
-
-### 4.4 Action Footer
-
-- **Primary:** "Sounds good → Continue" → `localStorage("analyze_result")` + `/chat?from=analyze`
-- **Secondary:** "This doesn't feel right" → `/`
-- **Hint:** "You can adjust this later. Nothing is locked in."
-
-### 4.5 /chat Integration (from=analyze)
-
-```typescript
-// src/app/chat/page.tsx
-useEffect(() => {
-  if (searchParams.get("from") === "analyze") {
-    const stored = localStorage.getItem("analyze_result");
-    // Parse stored data
-    // Create context message with profile info
-    // Replace welcome message (NE šalje na backend)
-    // Clear localStorage
-    router.replace("/chat");
-  }
-}, [searchParams]);
 ```
 
 ---
@@ -248,18 +195,9 @@ src/ui/
 └── Input.tsx             ← Input s label/error
 ```
 
-### 5.2 ChatBubble.tsx — Ključne komponente
+### 5.2 ChatChipData tipovi
 
 ```typescript
-// Tipovi
-interface ChatMessage {
-  id: string;
-  role: "assistant" | "user" | "system";
-  content: string;
-  chips?: ChatChipData[];
-  metadata?: { title, subtitle, fields[] };
-}
-
 interface ChatChipData {
   type: "suggestion" | "onboarding_option" | "product_confirm" | 
         "navigation" | "action" | "file_upload" | "asset_delete";
@@ -274,199 +212,123 @@ interface ChatChipData {
   uploadType?: string;
   accept?: string;
 }
-
-// Komponente
-export function ChatBubble({ message, onChipClick, ... })
-export function ActionButton({ label, onClick, variant, ... })
-export function ActionFooter({ primaryLabel, secondaryLabel, ... })
-```
-
-### 5.3 Design Tokens
-
-```css
-/* src/app/globals.css */
-:root {
-  --color-primary-500: #FFCA28;
-  --color-primary-600: #FFB300;
-  --color-lavender-100: #F8F7FF;
-  --color-lavender-200: #F4F3FF;
-  --shadow-card: 0 4px 20px -2px rgb(0 0 0 / 0.08);
-  --shadow-chat: 0 2px 8px -2px rgb(0 0 0 / 0.08);
-}
-```
-
-### 5.4 Tailwind Custom Classes
-
-```css
-.bg-gradient-lavender { background: linear-gradient(135deg, #f5f3ff, #ede9fe, #e9d5ff); }
-.shadow-chat { box-shadow: var(--shadow-chat); }
-.btn-primary { @apply bg-primary-500 hover:bg-primary-600 text-gray-900 font-semibold rounded-xl; }
 ```
 
 ---
 
-## 6. CHAT PAGE BRIDGE (page.tsx)
+## 6. DATABASE SCHEMA (V4 — Ažurirano za produkciju)
 
-### 6.1 Adapter Pattern
-
-```typescript
-// Konvertira interni Msg format → ChatMessage za ChatBubble
-function toDesignMessage(m: Msg): ChatMessage {
-  return {
-    id: m.id,
-    role: m.role,
-    content: m.text,
-    metadata: m.metadata,
-    chips: m.chips?.map(chip => {
-      if (typeof chip === "string") {
-        return { type: "suggestion", label: chip, value: chip };
-      }
-      return {
-        type: chip.type || "suggestion",
-        label: chip.label,
-        value: chip.value || chip.label,
-        confirmed: chip.confirmed,  // V7
-        // ... ostali props
-      };
-    }),
-  };
-}
-```
-
-### 6.2 handleSmartChipClick — Special Chips
-
-```typescript
-// ChatBubble šalje samo value, ali trebamo full chip za:
-async function handleSmartChipClick(value: string, msgId: string) {
-  const msg = msgs.find(m => m.id === msgId);
-  const chip = msg?.chips?.find(c => ...);
-
-  // product_confirm → API + vizualni feedback
-  if (chip.type === "product_confirm") {
-    await fetch("/api/products/confirm", ...);
-    setMsgs(prev => /* update chip.confirmed = true */);
-    return; // NE šalje chat poruku!
-  }
-
-  // navigation → router.push
-  if (chip.type === "navigation" && chip.href) {
-    router.push(chip.href);
-    return;
-  }
-
-  // file_upload → hidden input click
-  // asset_delete → confirm + API
-
-  // Default: šalje kao chat poruku
-  handleChipAction(value);
-}
-```
-
-### 6.3 Product Confirm Vizualni Feedback (V7)
-
-```typescript
-// Prije: ☐ Product Name — bijeli chip
-// Poslije: ✅ Product Name — zeleni chip s kvačicom
-
-// U Chip komponenti (ChatBubble.tsx):
-const isConfirmed = chip.confirmed === true;
-// Confirmed stil: bg-green-50 text-green-700 border-green-400
-```
-
----
-
-## 7. DATABASE SCHEMA (V3 — Ažurirano)
-
-### 7.1 Glavne tablice
+### 6.1 Projects tablica (TOČNA SCHEMA)
 
 ```sql
--- Projects
 projects (
   id TEXT PRIMARY KEY,
-  meta_access_token TEXT,      -- Instagram OAuth token (NE ig_access_token!)
-  meta_user_id TEXT,
-  ig_username TEXT,
-  created_at TIMESTAMPTZ
+  name TEXT,
+  meta_access_token TEXT,         -- Instagram OAuth token
+  meta_token_expires_at TIMESTAMPTZ,
+  ig_user_id TEXT,
+  ig_connected BOOLEAN DEFAULT false,
+  ig_publish_enabled BOOLEAN DEFAULT false,
+  fb_page_id TEXT,
+  plan_month TEXT,
+  plan_type TEXT,
+  created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
 )
+```
 
--- Assets (V7: dodana external_id)
+**VAŽNO:** Kolone `ig_token`, `meta_user_id`, `ig_username` NE POSTOJE!
+Koristi: `meta_access_token`, `ig_user_id`, `ig_connected`
+
+### 6.2 Assets tablica
+
+```sql
 assets (
   id TEXT PRIMARY KEY,
   project_id TEXT,
   type TEXT,                   -- 'image', 'video'
   source TEXT,                 -- 'instagram', 'upload'
-  url TEXT,
-  label TEXT,                  -- 'style_reference', 'product_reference', 'character_reference'
+  url TEXT,                    -- MORA biti Vercel Blob URL u produkciji!
+  label TEXT,                  -- 'style_reference', 'product_reference', etc.
   metadata JSONB,
-  external_id TEXT,            -- V7: IG media ID za duplicate detection
+  external_id TEXT,            -- IG media ID za duplicate detection
   created_at TIMESTAMPTZ
 )
+```
 
--- Detected Products (V7: dodane analysis_id, source)
+### 6.3 Chat Notifications tablica
+
+```sql
+chat_notifications (
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  project_id TEXT DEFAULT 'proj_local',  -- V8 FIX: dodano za produkciju
+  type TEXT,
+  title TEXT,
+  message TEXT,
+  data JSONB,
+  chips JSONB,
+  payload JSONB,
+  read BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ
+)
+```
+
+### 6.4 Detected Products
+
+```sql
 detected_products (
   id TEXT PRIMARY KEY,
   project_id TEXT,
   asset_id TEXT,
-  analysis_id TEXT,            -- V7: referenca na instagram_analyses.id
+  analysis_id TEXT,            -- referenca na instagram_analyses.id
   product_name TEXT,
   category TEXT,
   visual_features JSONB,
   prominence TEXT,
   confidence NUMERIC,
   frequency INTEGER DEFAULT 1,
-  source TEXT DEFAULT 'instagram_vision',  -- V7
+  source TEXT DEFAULT 'instagram',
   status TEXT CHECK (status IN ('pending', 'confirmed', 'rejected')),
+  first_seen_at TIMESTAMPTZ,
+  last_seen_at TIMESTAMPTZ,
   UNIQUE(asset_id, product_name)
-)
-
--- Chat Sessions
-chat_sessions (
-  id TEXT PRIMARY KEY,
-  project_id TEXT,
-  state JSONB,                 -- FSM state: { step, goal, profile_type, focus, ... }
-  created_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ
-)
-
--- Chat Messages
-chat_messages (
-  id TEXT PRIMARY KEY,
-  session_id TEXT,
-  role TEXT,
-  text TEXT,
-  meta JSONB,                  -- { chips: [...] }
-  created_at TIMESTAMPTZ
-)
-
--- Brand Profiles
-brand_profiles (
-  id TEXT PRIMARY KEY,
-  project_id TEXT UNIQUE,
-  visual_style JSONB,
-  content_themes JSONB,
-  caption_patterns JSONB,
-  brand_consistency JSONB,
-  updated_at TIMESTAMPTZ
 )
 ```
 
-### 7.2 V7 Migracije
+### 6.5 Instagram Analyses
 
 ```sql
--- Dodaj external_id za Instagram duplicate detection
-ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_external_id ON assets(external_id) WHERE external_id IS NOT NULL;
+instagram_analyses (
+  id TEXT PRIMARY KEY,
+  asset_id TEXT,
+  project_id TEXT,
+  analysis JSONB,
+  model_version TEXT,
+  tokens_used INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+)
+```
 
--- Dodaj analysis_id i source za product tracking
+### 6.6 Produkcijske migracije (sve izvršene)
+
+```sql
+-- V7 migracije
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
-ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram_vision';
+ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram';
+
+-- V8 migracije (produkcijski deploy)
+ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT 'proj_local';
+ALTER TABLE instagram_analyses ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE instagram_analyses ADD COLUMN IF NOT EXISTS project_id TEXT;
 ```
 
 ---
 
-## 8. STORAGE SUSTAV (V3)
+## 7. STORAGE SUSTAV (V4 — Produkcijski fix)
 
-### 8.1 Hybrid Storage
+### 7.1 Hybrid Storage
 
 ```typescript
 // src/lib/storage.ts
@@ -475,52 +337,50 @@ ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'inst
 // - MinIO/S3 (local dev): S3Client na portu 9100
 ```
 
-### 8.2 Vercel Blob Fix (V7)
+### 7.2 KRITIČNI BUG FIX: instagramIngest URL
 
 ```typescript
-// KRITIČNO: allowOverwrite za re-ingest
-async function putObjectBlob(key: string, body: Buffer, contentType: string) {
-  const blob = await put(key, body, {
-    access: "public",
-    contentType,
-    allowOverwrite: true,  // V7 FIX: re-ingest koristi iste keyeve
-  });
-  return blob.url;
-}
+// src/server/processors/instagramIngest.ts
+// PRIJE (BUG): makePublicUrl(s3Key) → generira proxy URL koji ne radi u produkciji
+// POSLIJE (FIX): makePublicUrl(uploadedUrl) → koristi Vercel Blob URL direktno
+
+const uploadedUrl = await putObject(s3Key, buffer, contentType);
+const publicUrl = makePublicUrl(uploadedUrl);  // ← MORA biti uploadedUrl, NE s3Key!
 ```
 
-### 8.3 URL Helpers
+**Zašto:** `putObject` u produkciji vraća pravi Vercel Blob URL
+(`https://tdtglu5leenek1zg.public.blob.vercel-storage.com/...`).
+Stari kod je ignorirao taj URL i generirao `APP_URL/vissocial/...` proxy URL koji ne radi.
 
-```typescript
-// src/lib/storageUrl.ts
-makePublicUrl()        // interno → HTTPS proxy za Vision API
-validateVisionUrl()    // provjera da URL radi za OpenAI
-getInternalStorageUrl() // server-side pristup MinIO-u
+### 7.3 makePublicUrl logika
 
-// src/lib/makePublicUrl.ts
-// Vercel Blob → passthrough
-// MinIO → APP_URL/vissocial/... proxy
+```
+Input                              → Output
+Vercel Blob URL (https://...blob)  → passthrough (as-is)
+https:// URL                       → passthrough
+MinIO relative path                → APP_URL/vissocial/{path}
 ```
 
 ---
 
-## 9. INSTAGRAM → ANALIZA → NOTIFIKACIJA PIPELINE
+## 8. INSTAGRAM → ANALIZA → NOTIFIKACIJA PIPELINE
 
-### 9.1 Kompletni Flow
+### 8.1 Kompletni Flow
 
 ```
 1. Instagram OAuth (/api/instagram/callback)
    → Token u projects.meta_access_token
+   → ig_connected = true
    → Queue: q_ingest.add("instagram.ingest")
 
-2. instagramIngest (worker)
+2. instagramIngest (worker na Railway)
    → Fetch media putem Graph API
-   → Upload slike u storage (allowOverwrite!)
-   → INSERT assets s external_id
+   → Upload slike u Vercel Blob (allowOverwrite!)
+   → INSERT assets s external_id i Vercel Blob URL
    → Queue: q_analyze za svaki asset
 
 3. analyzeInstagram (worker)
-   → GPT-4 Vision analiza
+   → GPT-4 Vision analiza (koristi Vercel Blob URL)
    → INSERT instagram_analyses
    → INSERT detected_products (analysis_id, source)
    → UPDATE brand_rebuild_events status
@@ -528,7 +388,7 @@ getInternalStorageUrl() // server-side pristup MinIO-u
 4. brandRebuild (worker)
    → Agregira visual_style, content_themes, caption_patterns
    → UPDATE brand_profiles
-   → notify.analysisComplete()
+   → notify.analysisComplete() → chat_notifications
 
 5. Frontend polling (5s)
    → GET /api/chat/notifications
@@ -536,17 +396,115 @@ getInternalStorageUrl() // server-side pristup MinIO-u
    → Klik → POST /api/products/confirm → zelena kvačica
 ```
 
-### 9.2 brand_rebuild_events Lifecycle
+---
+
+## 9. PRODUCTION DEPLOYMENT
+
+### 9.1 Infrastruktura
+
+| Service | Platform | Napomena |
+|---------|----------|----------|
+| Frontend (Next.js) | Vercel | Auto-deploy iz GitHub main |
+| Worker (BullMQ) | Railway | Auto-deploy iz GitHub main |
+| Database | Neon | PostgreSQL, zahtijeva SSL |
+| Redis | Railway | BullMQ queue backend |
+| Storage | Vercel Blob | Slike, renderovi |
+| Image Gen | fal.ai | Flux2, max 4 image_urls |
+
+### 9.2 Railway Environment Variables (OBAVEZNO)
+
+```env
+DATABASE_URL=postgresql://...@...neon.tech/neondb?sslmode=require
+REDIS_URL=redis://default:...@switchyard.proxy.rlwy.net:54046
+OPENAI_API_KEY=sk-...
+FAL_KEY=...
+BLOB_READ_WRITE_TOKEN=vercel_blob_...    # MORA biti isti kao na Vercel!
+APP_URL=https://vissocial.vercel.app     # BEZ trailing slasha!
+DEV_GENERATE_LIMIT=3                      # Za testiranje (default 30)
+NODE_ENV=production
+FAL_FLUX_EDIT_MODEL=flux-2/edit
+```
+
+**KRITIČNO:**
+- `BLOB_READ_WRITE_TOKEN` mora biti na OBJE platforme (Vercel + Railway)
+- `APP_URL` mora biti BEZ trailing slasha i BEZ newline/razmaka
+- `DEV_GENERATE_LIMIT` radi samo na Railway (worker), ne na Vercel
+
+### 9.3 SSL za Neon (db.ts)
+
+```typescript
+const isNeon = config.dbUrl?.includes("neon.tech");
+const sslConfig = IS_PRODUCTION || isNeon ? { rejectUnauthorized: false } : false;
+export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig });
+```
+
+### 9.4 Vercel API Routes — force-dynamic
+
+```typescript
+// OBAVEZNO na svim API routama koje čitaju iz baze:
+export const dynamic = "force-dynamic";
+```
+
+Bez toga Vercel kešira response na build-u i nikad ne osvježi podatke.
+
+### 9.5 fal.ai Ograničenja
+
+```typescript
+const FAL_MAX_IMAGE_URLS = 4;  // fal.ai limit
+// prioritizeRefs(): 1 product → 1 style → 1 character → fill remaining
+```
+
+### 9.6 Debug Endpoints
 
 ```
-pending → analyzing → ready → rebuilding → completed
-                                        → failed
-                                        → skipped (no analyses)
+GET  /api/debug/pipeline-status    — Pregled svih queue-ova, failed jobova, recentnih itema
+POST /api/debug/clean-failed       — Očisti failed jobove iz Redis queue-ova
+POST /api/debug/clean-old-packs    — Briše stare content packove
+GET  /health                       — Health check
 ```
 
 ---
 
-## 10. API ENDPOINTS
+## 10. TESTIRANJE — FULL RESET PROCEDURA
+
+### Kad trebaš čisto stanje:
+
+**1. Neon SQL Editor:**
+```sql
+TRUNCATE 
+  renders, content_features, content_items, content_packs,
+  chat_notifications, chat_messages, chat_sessions,
+  detected_products, instagram_analyses, brand_rebuild_events,
+  brand_profiles, assets, user_actions
+CASCADE;
+
+UPDATE projects 
+SET meta_access_token = NULL, ig_user_id = NULL, ig_connected = false 
+WHERE id = 'proj_local';
+```
+
+**2. Očisti Redis:**
+```powershell
+Invoke-RestMethod -Method POST -Uri "https://vissocial.vercel.app/api/debug/clean-failed"
+```
+
+**3. Otvori Incognito prozor** → `https://vissocial.vercel.app`
+
+**4. Provjeri pipeline nakon ingesta:**
+```powershell
+Invoke-RestMethod -Uri "https://vissocial.vercel.app/api/debug/pipeline-status" | ConvertTo-Json -Depth 10
+```
+
+**5. Provjeri URL-ove u bazi:**
+```sql
+SELECT id, LEFT(url, 80) FROM assets LIMIT 3;
+-- Mora biti: https://tdtglu5leenek1zg.public.blob.vercel-storage.com/...
+-- NE: https://vissocial.vercel.app/vissocial/...
+```
+
+---
+
+## 11. API ENDPOINTS
 
 ### Chat
 ```
@@ -558,9 +516,16 @@ POST /api/chat/notifications    - Označi pročitano
 POST /api/chat/reset            - Reset sesije i projekta
 ```
 
-### Analyze (V3 — NOVO)
+### Analyze (V3)
 ```
 POST /api/analyze               - Dvofazna brand analiza (scrape + GPT)
+```
+
+### Content
+```
+GET  /api/content/latest        - Dohvati najnoviji content pack (force-dynamic!)
+GET  /api/content/item          - Dohvati pojedini item
+PATCH /api/content/item         - Update item
 ```
 
 ### Instagram
@@ -570,56 +535,11 @@ GET  /api/instagram/callback    - OAuth callback
 POST /api/instagram/scrape      - Web scraping profila
 ```
 
-### Profile
+### Debug (SAMO za development)
 ```
-GET   /api/profile              - Dohvati brand profil
-PATCH /api/profile              - Ažuriraj brand profil
-POST  /api/profile/rebuild      - Pokreni rebuild
-```
-
-### Products
-```
-GET    /api/products            - Lista proizvoda
-POST   /api/products/confirm    - Potvrdi proizvod
-POST   /api/products/reject     - Odbaci proizvod
-PATCH  /api/products/[id]       - Update proizvod
-```
-
-### Assets
-```
-POST   /api/assets/upload       - Upload slike (s labelom)
-GET    /api/assets/references   - Dohvati reference images
-DELETE /api/assets/[id]         - Obriši asset
-```
-
----
-
-## 11. ENVIRONMENT VARIABLES
-
-```env
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/vissocial
-
-# Redis (VAŽNO: port 6380!)
-REDIS_URL=redis://localhost:6380
-
-# Storage - Local (MinIO)
-S3_ENDPOINT=http://localhost:9100
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_BUCKET=vissocial
-
-# Storage - Production (Vercel Blob)
-BLOB_READ_WRITE_TOKEN=vercel_blob_...
-
-# AI
-OPENAI_API_KEY=sk-...
-FAL_KEY=...
-
-# Instagram OAuth
-META_APP_ID=...
-META_APP_SECRET=...
-APP_URL=https://your-ngrok-url.ngrok-free.dev
+GET  /api/debug/pipeline-status - Queue i job status
+POST /api/debug/clean-failed    - Očisti failed Redis jobove
+POST /api/debug/clean-old-packs - Briše stare packove
 ```
 
 ---
@@ -633,18 +553,25 @@ APP_URL=https://your-ngrok-url.ngrok-free.dev
 - ✅ Duplicate messages fix
 - ✅ OAuth redirect loop
 - ✅ Reset API column (`ig_access_token` → `meta_access_token`)
-- ✅ Reference image upload system
-- ✅ Upload reference loop fix
-- ✅ Profile page null safety
 
 ### V7 Fixes
-- ✅ Uklonjen "Brzi pregled profila" iz INIT — samo 2 opcije
-- ✅ /analyze → /chat kontekst passing bez backend poziva
 - ✅ Database: `assets.external_id` kolona
 - ✅ Database: `detected_products.analysis_id` i `source` kolone
 - ✅ Storage: `allowOverwrite: true` za Vercel Blob
 - ✅ Product confirm: zelena kvačica nakon potvrde
-- ✅ Product confirm: uklonjen handleChipAction() nakon API
+
+### V8 — Production Deployment Fixes (24. veljače 2026)
+- ✅ **SSL za Neon:** `db.ts` — Pool bez SSL config → dodana SSL konfiguracija
+- ✅ **fal.ai limit:** `renderFlux.ts` — 5 referenci → max 4 s `prioritizeRefs()`
+- ✅ **Vercel caching:** `content/latest/route.ts` — dodano `export const dynamic = "force-dynamic"`
+- ✅ **Storage URL bug:** `instagramIngest.ts` — `makePublicUrl(s3Key)` → `makePublicUrl(uploadedUrl)`
+- ✅ **APP_URL trailing slash:** Railway varijabla imala razmak/newline → očišćeno
+- ✅ **BLOB_READ_WRITE_TOKEN:** Nedostajao na Railway → dodan
+- ✅ **Missing DB columns:** `chat_notifications.project_id`, `instagram_analyses.created_at`, `instagram_analyses.project_id` → dodani ALTER TABLE
+- ✅ **Redis monitoring:** Dodan ioredis za connection monitoring u worker.ts
+- ✅ **BullMQ lock duration:** Render queue povećan na 180s za fal.ai
+- ✅ **Worker logging:** Logger uključen u produkciji (bio isključen)
+- ✅ **Health check:** `/health` endpoint za monitoring
 
 ### V3 Design System Migration
 - ✅ Novi design system komponente (ChatBubble, ChatLayout, etc.)
@@ -652,90 +579,51 @@ APP_URL=https://your-ngrok-url.ngrok-free.dev
 - ✅ Profile Analysis stranica (/analyze/[handle])
 - ✅ Lavender gradient pozadina
 - ✅ AI avatar (sparkle, NE robot)
-- ✅ Tailwind custom boje (primary, lavender)
 
 ---
 
-## 13. FOLDER STRUKTURA (V3)
-
-```
-src/
-├── app/
-│   ├── globals.css
-│   ├── layout.tsx              ← Root layout + AppHeader
-│   ├── page.tsx                ← Landing page
-│   ├── analyze/
-│   │   └── [handle]/
-│   │       ├── page.tsx        ← Server component
-│   │       └── ProfileAnalysisClient.tsx
-│   ├── chat/
-│   │   └── page.tsx            ← Chat s FSM
-│   ├── calendar/
-│   ├── profile/
-│   └── settings/
-├── ui/
-│   ├── index.ts
-│   ├── ChatBubble.tsx
-│   ├── ChatLayout.tsx
-│   ├── AppHeader.tsx
-│   ├── Button.tsx
-│   ├── Card.tsx
-│   ├── Chip.tsx
-│   ├── Avatar.tsx
-│   ├── Icons.tsx
-│   └── Input.tsx
-├── lib/
-│   ├── config.ts
-│   ├── db.ts
-│   ├── storage.ts
-│   ├── storageUrl.ts
-│   └── notifications.ts
-└── server/
-    └── processors/
-        ├── instagramIngest.ts
-        ├── analyzeInstagram.ts
-        ├── brandRebuild.ts
-        └── planGenerate.ts
-```
-
----
-
-## 14. CHECKLIST ZA DEVELOPMENT
+## 13. CHECKLIST ZA DEVELOPMENT
 
 Prije svakog odgovora:
 
 - [ ] Koristi `project_knowledge_search` za provjeru koda
-- [ ] Provjeri odgovara li database schema
+- [ ] Provjeri odgovara li database schema (TOČNA IMENA KOLONA!)
 - [ ] Generiraj KOMPLETNE datoteke, ne snippete
-- [ ] Redis port = **6380**
+- [ ] Redis port = **6380** (lokalno)
 - [ ] Project ID = **"proj_local"**
-- [ ] Token kolona = **meta_access_token**
+- [ ] Token kolona = **meta_access_token** (NE ig_token!)
+- [ ] IG user kolona = **ig_user_id** (NE meta_user_id!)
+- [ ] IG connected kolona = **ig_connected** (boolean)
 - [ ] Storage: **allowOverwrite: true** za Vercel Blob
-- [ ] Komponente u **src/ui/** (NE src/components/)
-- [ ] ChatChipData ima **confirmed** prop za vizualni feedback
+- [ ] Storage: koristi **uploadedUrl** (NE s3Key) za makePublicUrl u produkciji
+- [ ] API routes: dodaj `export const dynamic = "force-dynamic"` za DB queries
+- [ ] fal.ai: max **4 image_urls** po requestu
+- [ ] APP_URL: **BEZ trailing slasha**
 
 ---
 
-## 15. BUDUĆE FAZE (TODO)
+## 14. BUDUĆE FAZE (TODO)
 
 ### Kratkoročno
+- [ ] DEV_GENERATE_LIMIT enforcement (trenutno ne radi pouzdano)
+- [ ] Proper database migration system (umjesto ručnih ALTER TABLE)
 - [ ] Error handling poboljšanja na /analyze stranici
-- [ ] Toast notifikacije za upload success/error
-- [ ] Step indicator dinamičko ažuriranje u ChatLayout
 
 ### Srednjoročno
 - [ ] Multi-image upload
 - [ ] Cleanup: obrisati Card.tsx, Badge.tsx ako se ne koriste
-- [ ] Cleanup: obrisati ChipButton iz page.tsx (handleSmartChipClick ga zamjenjuje)
+- [ ] Production monitoring (alerts za failed jobs)
+- [ ] Rate limiting na API endpoints
 
 ### Dugoročno
 - [ ] Shopify integration
 - [ ] Automatic scheduling
 - [ ] A/B testing za content
+- [ ] Multi-tenant auth
 
 ---
 
 **KRAJ DOKUMENTA**
 
 *Ovaj dokument je autoritativan izvor znanja o Vissocial projektu.*
-*Zadnje ažuriranje: 7. veljače 2026 — V3 Design System Migration + V7 Fixes*
+*Zadnje ažuriranje: 24. veljače 2026 — V8 Production Deployment Fixes*

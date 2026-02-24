@@ -1,160 +1,182 @@
-# Features (Implemented)
+# Vissocial — Features Documentation
 
-> **Zadnje ažuriranje:** 7. veljače 2026 — V3 Design System + V7 Fixes
+> Zadnje ažuriranje: 24. veljače 2026 — V8 Production Deployment
 
-## Landing & Profile Analysis (V3 — NOVO)
+## Profile Analysis (/analyze/[handle])
 
-### Landing Page
-- Contently-style dizajn s lavender gradientom
-- Input: @handle, instagram.com/url, ili ime firme
-- "Analyze profile" → redirect na /analyze/[handle]
-- "See an example" → /analyze/nike
+### Endpoint
+- `POST /api/analyze` — Two-phase brand analysis
+- Phase 1: Scrape Instagram profile (public data)
+- Phase 2: GPT-4o-mini analysis (company, services, tone, audience, USP)
+- Timeout: 15s total, 10s for GPT
 
-### Profile Analysis (/analyze/[handle])
-- Dvofazna analiza: Instagram scrape + GPT-4o-mini brand analysis
-- Prikazuje: Company, Services, Brand Tone, Target Audience, Language
-- USP Analysis (2-3 paragrafa)
-- Recommended Focus za idućih 30 dana
-- Progressive reveal animacije (staggered fade-in)
+### UI
+- Progressive reveal with staggered animations
+- Skeleton loading states
 - Error handling: timeout, network, not_found, generic
-- "Sounds good → Continue" → /chat?from=analyze
+- Action footer: "Sounds good → Continue" / "This doesn't feel right"
 
-## Chat-first UX
+### Data Flow
+- Analysis stored in localStorage("analyze_result")
+- Passed to /chat via `?from=analyze` query param
+- Chat reads and displays context, then clears localStorage
 
-### Onboarding Flow
-- Finite-state chat: goal → planned posts → profile type → focus → horizon
-- **Init opcije (V7):** samo 2 — "Spoji Instagram" + "Nastavi bez Instagrama"
-- Clickable chips za brze odgovore
-- Podržava string chips (legacy) i ChatChipData objekte
+## Chat System (/chat)
 
-### Chat Commands
-- `generiraj plan` / `generate` → Queue content plan generation
-- `poveži instagram` → Redirect na OAuth
-- `export` → Generate CSV + ZIP bundle
-- `prikaži proizvode` → Display detected products za potvrdu
+### FSM (Finite State Machine)
+- States: init → onboarding → ready_to_generate → generating → calendar
+- Each state has specific chips and allowed transitions
+- Session stored in `chat_sessions.state` (JSONB)
 
-### Async Notifications
-- Worker procesi šalju notifikacije u chat
-- Frontend polling svakih 5 sekundi
-- Notifikacije uključuju actionable chips
-- Auto-marked as read kad se prikažu
+### Chip Types
+| Type | Behavior |
+|------|----------|
+| `suggestion` | Sends as chat message |
+| `onboarding_option` | Sends as chat message, advances FSM |
+| `product_confirm` | API call to confirm/reject, visual feedback |
+| `navigation` | Router.push to href |
+| `file_upload` | Opens file picker |
+| `asset_delete` | Confirm dialog + API delete |
 
-### Product Confirmation (V7 — poboljšano)
-- Chipovi za potvrdu proizvoda: ☐ Product Name
-- Klik → API poziv → vizualni feedback
-- **Prije:** ☐ bijeli chip
-- **Poslije:** ✅ zeleni chip s kvačicom
-- Potvrđeni proizvodi idu u `products` tablicu
-
-## Navigation (V3 — NOVO)
-
-### Dvoslojna arhitektura
-- **ChatLayout.tsx** — za /chat i /analyze stranice
-  - Vissocial logo + nav linkovi + step indicator
-  - "Nova sesija" button
-- **AppHeader.tsx** — za /settings, /profile, /calendar
-  - Vissocial logo + nav linkovi
-  - Uvjetno renderiranje (null na "/" i "/chat")
-
-### NAV_ITEMS
-- Chat, Calendar, Profile, Settings
-- Active state detekcija putem usePathname()
+### Notifications (Async)
+- Frontend polls `GET /api/chat/notifications` every 5s
+- Worker pushes notifications after: ingest, analyze, brand rebuild, plan generate, render complete
+- Notifications contain chips for user actions
 
 ## Instagram Integration
 
 ### OAuth Flow
-1. User klikne "Connect Instagram" u Settings
-2. Redirect na Meta OAuth
-3. Exchange code za access token
-4. Discover connected professional account via Page
-5. Store long-lived token (59 days)
+1. User clicks "Spoji Instagram" chip
+2. Redirect to `/api/instagram/login` → Meta OAuth
+3. Callback at `/api/instagram/callback`
+4. Token saved to `projects.meta_access_token`
+5. `ig_connected` set to true
+6. Queue: `instagram.ingest` job
 
-### Media Ingest
-- Fetches zadnjih 25 media items
-- Downloads slike u MinIO/Vercel Blob storage
-- **V7 fix:** `allowOverwrite: true` za re-ingest
-- **V7 fix:** `external_id` kolona za duplicate detection
-- Queue Vision analysis za svaku sliku
+### Media Ingest Pipeline
+1. Fetch media via Graph API (limit 25)
+2. Download each image to buffer
+3. Upload to Vercel Blob (`putObject` with `allowOverwrite: true`)
+4. **CRITICAL:** Store Vercel Blob URL (not proxy URL) in `assets.url`
+5. Queue Vision analysis for each image asset
 
-### Publishing
-- Toggle: `ENABLE_INSTAGRAM_PUBLISH` + per-project `ig_publish_enabled`
-- Uses Media Container API
-- Supports scheduled publishing via `schedule.tick`
+### Vision Analysis
+- GPT-4 Vision analyzes each image
+- Detects products, visual style, content themes
+- Saves to `instagram_analyses` and `detected_products`
+- Triggers brand rebuild when all analyses complete
 
-## Vision Analysis
-
-### GPT-4 Vision Integration
-- Analizira svaku Instagram sliku
-- Ekstrahira: visual style, products, brand elements, quality
-- Stores raw JSON za fleksibilnost
-
-### Product Detection
-- Auto-detektira proizvode iz slika
-- **V7 fix:** `analysis_id` i `source` kolone
-- Stores u `detected_products` tablicu
-- User confirms/rejects via chat chips
-- Confirmed products idu u `products` tablicu
-
-### Brand Profile Aggregation
-- Agregira sve analize u brand profile
-- Kalkulira: dominant colors, photography style, mood
-- Prati caption patterns i consistency scores
-- Event-driven rebuild on analysis completion
+### Brand Rebuild
+- Aggregates all analyses into unified brand profile
+- Calculates: visual_style, content_themes, caption_patterns, brand_consistency
+- Saves to `brand_profiles`
+- Sends notification with pending product count
 
 ## Content Generation
 
-### Plan Generation
-- ChatGPT za topic/caption/visual direction
-- Thompson sampling odabire content format
-- Supports multiple formats: feed, reel, carousel, story
+### Plan Generation (LLM)
+- Uses Thompson sampling (bandit arms) for content variety
+- Generates N items (controlled by `DEV_GENERATE_LIMIT`, default 30)
+- Each item: topic, caption, visual_brief, format (feed/story/reel/carousel)
+- Queues render job for each item
 
-### Visual Rendering
-- Flux2 via fal.ai generira preview slike
-- Prompt uključuje scene description + on-screen text
-- Negative prompts za quality control
+### Image Rendering (fal.ai Flux2)
+- Model: `flux-2/edit` (with reference images) or `flux/dev` (without)
+- **Max 4 image_urls per request** (fal.ai hard limit)
+- Priority: 1 product → 1 style → 1 character → fill remaining slot
+- Smart prompt includes scene, product fidelity instructions, photography style
+- Lock duration: 180s (fal.ai can be slow)
 
-### Multi-reference Support
-- Upload reference images labeled:
-  - `style_reference` — Visual style
-  - `product_reference` — Product shots
-  - `character_reference` — People/mascots
-- Do 8 referenci korišteno u generiranju
+### Calendar (/calendar)
+- Polls `/api/content/latest` every 4s
+- **CRITICAL:** Route must have `export const dynamic = "force-dynamic"`
+- Displays grid of items with thumbnail, day, format, status badges
+- Click → `/item/{id}` for detail view
 
-## Calendar/Editor
+## Background Workers
 
-### Monthly View
-- Grid content items po danu
-- Thumbnail previews kad je renderirano
-- Status badges (draft, approved, scheduled, published)
+### Queue Configuration
+| Queue | Job | Concurrency | Lock Duration |
+|-------|-----|-------------|---------------|
+| q_ingest | instagram.ingest | 1 | 60s |
+| q_analyze | analyze.instagram | 3 | 90s |
+| q_brand_rebuild | brand.rebuild | 1 | 60s |
+| q_llm | plan.generate | 1 | 60s |
+| q_render | render.flux | 3 | **180s** |
+| q_publish | schedule.tick | 3 | 60s |
+| q_publish | publish.instagram | 3 | 60s |
+| q_metrics | metrics.ingest | 1 | 60s |
 
-### Item Editor
-- Edit caption (short/long)
-- Set publish mode (export only, schedule, auto-publish)
-- Set scheduled time
-- Approve/unapprove
-- Regenerate s custom instruction
-- Publish now (manual)
+### Worker Deployment (Railway)
+- Single Node.js process running all workers
+- Redis connection monitoring via ioredis
+- Auto-reconnect on ECONNRESET
+- Queue event listeners for failed/stalled jobs
 
-## Export
+## Storage (V8 — Production)
 
-### Bundle Contents
-- CSV sa svim item metadatama
-- ZIP containing:
-  - Individual caption.txt files
-  - Rendered images (kad dostupne)
+### Hybrid System
+- **Vercel Blob** (production): when `BLOB_READ_WRITE_TOKEN` exists
+- **MinIO/S3** (local dev): S3Client on port 9100
 
-## Design System (V3 — NOVO)
+### Key Rules
+1. `allowOverwrite: true` — required for re-ingest
+2. `makePublicUrl(uploadedUrl)` — MUST use uploadedUrl, NOT s3Key
+3. Vercel Blob URLs pass through makePublicUrl unchanged
+4. MinIO URLs get transformed to APP_URL proxy format
+5. `APP_URL` must have NO trailing slash
 
-### Komponente (src/ui/)
-- **ChatBubble.tsx** — Chat poruke, chipovi, AI/User avatari
-- **ChatLayout.tsx** — Layout za chat stranice s headerom
-- **AppHeader.tsx** — Navigacija za ostale stranice
-- **Button.tsx** — Primary, secondary, ghost, link varijante
-- **Card.tsx** — Card wrapper s varijantama
-- **Chip.tsx** — Standalone chip komponenta
-- **Avatar.tsx** — AI (sparkle) i User (inicijali) avatari
-- **Icons.tsx** — SVG ikone library
-- **Input.tsx** — Input s label/error
+### URL Validation
+- Assets in DB must have `https://...blob.vercel-storage.com/...` URLs in production
+- NOT `https://vissocial.vercel.app/vissocial/...` (proxy format, doesn't work)
+- Vision API needs direct Vercel Blob URLs to download images
+
+## Database (Neon PostgreSQL)
+
+### SSL Requirement
+```typescript
+// src/lib/db.ts
+const isNeon = config.dbUrl?.includes("neon.tech");
+const sslConfig = IS_PRODUCTION || isNeon ? { rejectUnauthorized: false } : false;
+export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig });
+```
+
+### Projects Table — Exact Column Names
+| Column | Type | Note |
+|--------|------|------|
+| id | TEXT | Primary key |
+| meta_access_token | TEXT | IG OAuth token (NOT ig_token!) |
+| ig_user_id | TEXT | Instagram user ID |
+| ig_connected | BOOLEAN | Connection status |
+| ig_publish_enabled | BOOLEAN | Publishing toggle |
+| fb_page_id | TEXT | Facebook page ID |
+| meta_token_expires_at | TIMESTAMPTZ | Token expiry |
+
+**IMPORTANT:** Columns `ig_token`, `meta_user_id`, `ig_username` do NOT exist!
+
+## Debug & Monitoring
+
+### Endpoints
+- `GET /api/debug/pipeline-status` — Full system overview (queues, failed jobs, recent items/packs, DB status)
+- `POST /api/debug/clean-failed` — Clean failed jobs from all Redis queues
+- `POST /api/debug/clean-old-packs` — Delete old content packs, keep latest
+- `GET /health` — Basic health check
+
+### Full Reset Procedure
+See VISSOCIAL_COMPLETE_CONTEXT_V3.md Section 10 for complete reset SQL and steps.
+
+## Design System
+
+### Components (src/ui/)
+- **ChatBubble.tsx** — Messages, chips, metadata cards, avatari
+- **ChatLayout.tsx** — Layout wrapper with header, step indicator
+- **AppHeader.tsx** — Navigation for non-chat pages
+- **Button.tsx** — Primary, secondary, ghost variants
+- **Card.tsx** — Card wrapper with shadow
+- **Chip.tsx** — Standalone chip component
+- **Avatar.tsx** — AI (sparkle) and User (initials) avatari
+- **Icons.tsx** — SVG icon library
+- **Input.tsx** — Input with label/error
 
 ### Design Tokens
 - Primary: žuta (#FFCA28)
@@ -166,34 +188,4 @@
 - `.bg-gradient-lavender`
 - `.shadow-chat`
 - `.btn-primary`
-- Custom boje: primary-50 do primary-700, lavender-50 do lavender-200
-
-## Background Workers
-
-### Queue Configuration
-- `lockDuration: 60000` (60s) sprječava lock expiration
-- `stalledInterval: 30000` detektira stuck jobs
-- `concurrency` varira po queue tipu
-
-### Job Types
-| Queue | Job | Concurrency |
-|-------|-----|-------------|
-| q_ingest | instagram.ingest | 1 |
-| q_analyze | analyze.instagram | 3 |
-| q_brand_rebuild | brand.rebuild | 1 |
-| q_llm | plan.generate | 1 |
-| q_render | render.flux | 3 |
-| q_publish | schedule.tick | 3 |
-| q_publish | publish.instagram | 3 |
-| q_metrics | metrics.ingest | 1 |
-
-## Storage (V7 — ažurirano)
-
-### Hybrid System
-- **Vercel Blob** (production): kad postoji BLOB_READ_WRITE_TOKEN
-- **MinIO/S3** (local dev): S3Client na portu 9100
-
-### Ključne funkcije
-- `allowOverwrite: true` — obavezno za re-ingest
-- `makePublicUrl()` — interno → HTTPS proxy za Vision API
-- `validateVisionUrl()` — provjera URL-a za OpenAI
+- Custom colors: primary-50 to primary-700, lavender-50 to lavender-200
