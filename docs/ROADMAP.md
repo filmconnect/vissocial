@@ -1,6 +1,6 @@
 # Vissocial — Roadmap
 
-> Zadnje ažuriranje: 24. veljače 2026
+> Zadnje ažuriranje: 25. veljače 2026
 
 ## ✅ Completed
 
@@ -51,13 +51,26 @@
 - [x] Worker logging enabled in production
 - [x] Full pipeline verified: OAuth → Ingest → Analyze → Brand Rebuild → Notification → Plan → Render → Calendar
 
+### Phase 6: Multi-User Support (V9) — Feb 25, 2026
+- [x] Dynamic project_id via cookie ("vissocial_pid")
+- [x] `src/lib/projectId.ts` — getProjectId(), readProjectId(), setProjectIdCookie(), ensureProject()
+- [x] 19 API routes migrated from hardcoded "proj_local" to dynamic project_id
+- [x] "Nova sesija" creates new project + cookie (old project preserved)
+- [x] Instagram OAuth passes project_id via state parameter
+- [x] Instagram reconnect detects account change, cleans old data
+- [x] Database migration tracking system (_migrations table, npm run migrate)
+- [x] Assets unique index per-project (idx_assets_project_external_id)
+- [x] Worker dotenv import for local dev
+- [x] Worker port conflict fix (3001 default instead of 3000)
+- [x] fal.ai safety checker disabled (content_policy_violation fix)
+- [x] scheduleTick return type fix
+
 ## 🔄 In Progress
 
 ### Production Stabilization
 - [ ] DEV_GENERATE_LIMIT reliable enforcement
-- [ ] Database migration system (replace manual ALTER TABLE)
 - [ ] Production monitoring & alerting
-- [ ] BLOB_READ_WRITE_TOKEN rotation (token shared in chat — needs rotation)
+- [ ] Credential rotation (keys shared in chat — needs rotation)
 
 ### Brand Profile & Products
 - [ ] /profile stranica s brand editing
@@ -67,32 +80,40 @@
 
 ## 📋 Planned
 
-### Phase 6: Publishing
+### Phase 7: Publishing
 - [ ] Real posting scheduler UI
 - [ ] Queue status dashboard
 - [ ] Retry failed posts
 - [ ] S3 signed URLs za export
 
-### Phase 7: Multi-platform
+### Phase 8: Multi-platform
 - [ ] Platform abstraction layer
 - [ ] TikTok integration
 - [ ] Facebook Page posting
 - [ ] LinkedIn (later)
 
-### Phase 8: Video
+### Phase 9: Video
 - [ ] video.generate queue
 - [ ] Luma/Runway adapters
 - [ ] Image-to-motion
 - [ ] Captions overlay
 
-### Phase 9: Enterprise
-- [ ] Multi-tenant auth
+### Phase 10: Enterprise
+- [ ] Proper auth system (replace cookie-based project isolation)
 - [ ] LoRA training pipeline
 - [ ] Brand safety rules
 - [ ] Logo protection
 - [ ] Shopify integration
 
 ## Known Issues
+
+### Resolved (V9 — Multi-User)
+- ~~Hardcoded proj_local blocks multi-user~~ → Fixed (dynamic project_id via cookie)
+- ~~assets.external_id global unique constraint~~ → Fixed (per-project unique index)
+- ~~fal.ai content_policy_violation~~ → Fixed (safety checker disabled)
+- ~~scheduleTick return type error~~ → Fixed (return {} as ScheduleTickResult)
+- ~~Worker port conflict with Next.js~~ → Fixed (default 3001)
+- ~~Worker .env not loading~~ → Fixed (import dotenv/config)
 
 ### Resolved (V8 — Production)
 - ~~SSL connection error on Neon~~ → Fixed (db.ts SSL config)
@@ -114,9 +135,7 @@
 
 ### Open — Medium
 1. **DEV_GENERATE_LIMIT** — Set to 3 in Railway but may not take effect reliably
-   - Config reads from env but worker may cache old value
-2. **Redis ECONNRESET** — Railway Redis proxy occasionally drops connections
-   - Worker auto-reconnects, not critical but noisy in logs
+2. **Redis ECONNRESET** — Railway Redis proxy occasionally drops connections (auto-reconnects)
 
 ### Open — Low
 1. **Badge komponenta** — ne postoji u novom design sistemu
@@ -142,3 +161,4 @@
 | V3 | Feb 7, 2026 | Design system migration, Profile Analysis |
 | V7 | Feb 7, 2026 | Database fixes, Product confirm UI |
 | V8 | Feb 24, 2026 | **Production deployment**, SSL, Storage URL, fal.ai limit |
+| V9 | Feb 25, 2026 | **Multi-user support**, dynamic project_id, migration tracking |

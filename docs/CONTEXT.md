@@ -2,7 +2,7 @@
 
 > **NAPOMENA:** Ovaj dokument služi kao autoritativni izvor znanja o Vissocial projektu. U slučaju proturječja s project knowledge ili drugim izvorima, **ovaj dokument ima prioritet**.
 > 
-> **Verzija:** 4.0 (Ažurirano: 24. veljače 2026)
+> **Verzija:** 5.0 (Ažurirano: 25. veljače 2026)
 > **Branch:** `main` (production deployment)
 > **GitHub:** Projekt je spojen s GitHub repozitorijem - kod se redovito sync-a
 
@@ -22,8 +22,8 @@
   - GPT-4 Vision za analizu slika
   - GPT-4o-mini za brand analizu (/api/analyze)
   - ChatGPT za generiranje sadržaja
-  - fal.ai (Flux2) za generiranje slika — **max 4 image_urls po requestu**
-- **Project ID:** `proj_local` (hardkodirano za development)
+  - fal.ai (Flux2) za generiranje slika — **max 4 image_urls po requestu**, **safety checker disabled**
+- **Project ID:** Dinamički, cookie-based (`vissocial_pid`) — **NE hardkodirani `proj_local`!**
 
 ### 1.2 Production Infrastruktura
 
@@ -81,6 +81,7 @@ C:\Users\Velo\source\vissocial_chat\vissocial_app\
 [STEP 2: CONNECT INSTAGRAM] (/chat)
         │   - Init: 2 opcije (Spoji IG, Nastavi bez)
         │   - OAuth flow ili manual input
+        │   - Instagram zahtijeva Professional/Creator account
         │
         ├───► OAuth success ───► Instagram Ingest ───► Vision Analysis
         │
@@ -118,21 +119,90 @@ C:\Users\Velo\source\vissocial_chat\vissocial_app\
 | `ready_to_generate` | Potvrda generiranja | generating |
 | `generating` | U tijeku | calendar |
 
-### 2.3 Init Chips (V7 — samo 2 opcije)
+### 2.3 Init Chips (V9 — navigation tip)
 
 ```typescript
 // src/app/api/chat/session/route.ts
 chips: [
-  { type: "navigation", label: "Spoji Instagram", href: "/api/instagram/login" },
+  { type: "navigation", label: "Spoji Instagram", href: "/settings" },
   { type: "onboarding_option", label: "Nastavi bez Instagrama", value: "nastavi bez" }
 ]
 ```
 
 ---
 
-## 3. NAVIGACIJSKA ARHITEKTURA (V3 — Dvoslojna)
+## 3. MULTI-USER SUSTAV (V9 — Dynamic Project ID)
 
 ### 3.1 Pregled
+
+V9 uvodi cookie-based project isolation. Svaki korisnik automatski dobiva svoj projekt — nema auth sustava, ali svaki browser/session ima vlastiti `project_id`.
+
+### 3.2 Core modul: `src/lib/projectId.ts`
+
+```typescript
+// getProjectId() — čita cookie "vissocial_pid", kreira projekt ako ne postoji
+// readProjectId() — read-only za OAuth state param
+// setProjectIdCookie() — postavlja httpOnly cookie (30 dana)
+// ensureProject() — verificira da projekt i brand_profile postoje
+```
+
+### 3.3 Kako radi
+
+```
+1. Korisnik otvori /chat
+   → getProjectId() čita cookie "vissocial_pid"
+   → Ako nema → kreira novi projekt (proj_XXXXXXXXXXXX) + cookie
+   → Ako ima → verificira da projekt postoji u bazi
+
+2. Instagram OAuth
+   → login route: project_id ide u OAuth state parametar
+   → callback route: čita project_id iz state, sprema token na taj projekt
+   → Detektira promjenu IG accounta (čisti stare podatke ako različit ig_user_id)
+
+3. "Nova sesija" gumb
+   → POST /api/chat/reset
+   → Kreira NOVI projekt s novim ID-om
+   → Postavlja novi cookie (prepisuje stari)
+   → Stari projekt ostaje u bazi ali je orphaned
+```
+
+### 3.4 Migrirani fajlovi (19 ruta)
+
+Sve API rute koriste `getProjectId()` umjesto hardkodiranog `proj_local`:
+- `src/app/api/chat/session/route.ts`
+- `src/app/api/chat/message/route.ts`
+- `src/app/api/chat/notifications/route.ts`
+- `src/app/api/chat/notify/route.ts`
+- `src/app/api/chat/reset/route.ts`
+- `src/app/api/instagram/login/route.ts`
+- `src/app/api/instagram/callback/route.ts`
+- `src/app/api/projects/me/route.ts`
+- `src/app/api/content/latest/route.ts`
+- `src/app/api/export/route.ts`
+- `src/app/api/products/pending/route.ts`
+- `src/app/api/products/route.ts`
+- `src/app/api/profile/rebuild/route.ts`
+- `src/app/api/profile/route.ts`
+- `src/app/api/scrape/website/route.ts`
+- `src/app/api/analyze/status/route.ts`
+- `src/app/api/analyze/trigger/route.ts`
+- `src/app/api/assets/presign/route.ts`
+- `src/app/api/assets/references/route.ts`
+- `src/app/api/assets/upload/route.ts`
+
+### 3.5 Worker konfiguracija (V9)
+
+```typescript
+// src/server/worker.ts
+import 'dotenv/config';  // Potrebno za lokalni dev (next dev auto-loadira .env)
+const PORT = process.env.PORT || 3001;  // 3001 lokalno, Railway postavlja PORT
+```
+
+---
+
+## 4. NAVIGACIJSKA ARHITEKTURA (V3 — Dvoslojna)
+
+### 4.1 Pregled
 
 | Ruta | Header | Izvor |
 |------|--------|-------|
@@ -143,7 +213,7 @@ chips: [
 | `/profile` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
 | `/calendar` | AppHeader (nav linkovi) | AppHeader.tsx via layout.tsx |
 
-### 3.2 NAV_ITEMS (dijeljeno)
+### 4.2 NAV_ITEMS (dijeljeno)
 
 ```typescript
 const NAV_ITEMS = [
@@ -152,27 +222,6 @@ const NAV_ITEMS = [
   { label: "Profile", href: "/profile" },
   { label: "Settings", href: "/settings" },
 ];
-```
-
----
-
-## 4. PROFILE ANALYSIS STRANICA (V3)
-
-### 4.1 API Endpoint
-
-```
-POST /api/analyze
-  Body: { input: "@handle" | "https://url" | "Firma d.o.o." }
-  Response: {
-    success: boolean,
-    input_type: "instagram_handle" | "web_url" | "company_name",
-    basic: { handle, full_name, bio, followers, posts_count, profile_pic_url },
-    analysis: {
-      company, services, brand_tone, target_audience, language,
-      usp_analysis, recommended_focus, strengths[], opportunities[]
-    }
-  }
-  Timeout: 15s (GPT: 10s)
 ```
 
 ---
@@ -216,15 +265,15 @@ interface ChatChipData {
 
 ---
 
-## 6. DATABASE SCHEMA (V4 — Ažurirano za produkciju)
+## 6. DATABASE SCHEMA (V5 — Multi-project)
 
-### 6.1 Projects tablica (TOČNA SCHEMA)
+### 6.1 Projects tablica
 
 ```sql
 projects (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,          -- V9: dinamički "proj_XXXXXXXXXXXX"
   name TEXT,
-  meta_access_token TEXT,         -- Instagram OAuth token
+  meta_access_token TEXT,       -- Instagram OAuth token
   meta_token_expires_at TIMESTAMPTZ,
   ig_user_id TEXT,
   ig_connected BOOLEAN DEFAULT false,
@@ -254,75 +303,35 @@ assets (
   external_id TEXT,            -- IG media ID za duplicate detection
   created_at TIMESTAMPTZ
 )
+-- V9: Unique constraint je per-project (NE globalni!)
+-- UNIQUE INDEX idx_assets_project_external_id ON assets(project_id, external_id) WHERE external_id IS NOT NULL
 ```
 
-### 6.3 Chat Notifications tablica
+### 6.3 Migration Tracking tablica (V9)
 
 ```sql
-chat_notifications (
-  id TEXT PRIMARY KEY,
-  session_id TEXT,
-  project_id TEXT DEFAULT 'proj_local',  -- V8 FIX: dodano za produkciju
-  type TEXT,
-  title TEXT,
-  message TEXT,
-  data JSONB,
-  chips JSONB,
-  payload JSONB,
-  read BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ
+_migrations (
+  name TEXT PRIMARY KEY,       -- npr. '001_complete_schema.sql'
+  applied_at TIMESTAMPTZ DEFAULT NOW()
 )
 ```
 
-### 6.4 Detected Products
+### 6.4 Migracije
 
-```sql
-detected_products (
-  id TEXT PRIMARY KEY,
-  project_id TEXT,
-  asset_id TEXT,
-  analysis_id TEXT,            -- referenca na instagram_analyses.id
-  product_name TEXT,
-  category TEXT,
-  visual_features JSONB,
-  prominence TEXT,
-  confidence NUMERIC,
-  frequency INTEGER DEFAULT 1,
-  source TEXT DEFAULT 'instagram',
-  status TEXT CHECK (status IN ('pending', 'confirmed', 'rejected')),
-  first_seen_at TIMESTAMPTZ,
-  last_seen_at TIMESTAMPTZ,
-  UNIQUE(asset_id, product_name)
-)
+```
+src/db/migrations/
+└── 001_complete_schema.sql    -- Kompletna schema (sve tablice)
 ```
 
-### 6.5 Instagram Analyses
+**Pokretanje:** `npm run migrate` (koristi `src/lib/sql.ts`)
+- Kreira `_migrations` tablicu ako ne postoji
+- Preskače već primijenjene migracije
+- Izvršava samo nove `.sql` datoteke
+- Radi identično lokalno i na produkciji
 
-```sql
-instagram_analyses (
-  id TEXT PRIMARY KEY,
-  asset_id TEXT,
-  project_id TEXT,
-  analysis JSONB,
-  model_version TEXT,
-  tokens_used INTEGER,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-)
-```
-
-### 6.6 Produkcijske migracije (sve izvršene)
-
-```sql
--- V7 migracije
-ALTER TABLE assets ADD COLUMN IF NOT EXISTS external_id TEXT;
-ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS analysis_id TEXT;
-ALTER TABLE detected_products ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'instagram';
-
--- V8 migracije (produkcijski deploy)
-ALTER TABLE chat_notifications ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT 'proj_local';
-ALTER TABLE instagram_analyses ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
-ALTER TABLE instagram_analyses ADD COLUMN IF NOT EXISTS project_id TEXT;
-```
+**Produkcijska migracija:**
+- Opcija A: Neon SQL Editor u browseru
+- Opcija B: `$env:DATABASE_URL="neon_url"; npm run migrate`
 
 ---
 
@@ -341,16 +350,9 @@ ALTER TABLE instagram_analyses ADD COLUMN IF NOT EXISTS project_id TEXT;
 
 ```typescript
 // src/server/processors/instagramIngest.ts
-// PRIJE (BUG): makePublicUrl(s3Key) → generira proxy URL koji ne radi u produkciji
-// POSLIJE (FIX): makePublicUrl(uploadedUrl) → koristi Vercel Blob URL direktno
-
 const uploadedUrl = await putObject(s3Key, buffer, contentType);
 const publicUrl = makePublicUrl(uploadedUrl);  // ← MORA biti uploadedUrl, NE s3Key!
 ```
-
-**Zašto:** `putObject` u produkciji vraća pravi Vercel Blob URL
-(`https://tdtglu5leenek1zg.public.blob.vercel-storage.com/...`).
-Stari kod je ignorirao taj URL i generirao `APP_URL/vissocial/...` proxy URL koji ne radi.
 
 ### 7.3 makePublicUrl logika
 
@@ -369,8 +371,10 @@ MinIO relative path                → APP_URL/vissocial/{path}
 
 ```
 1. Instagram OAuth (/api/instagram/callback)
+   → Čita project_id iz OAuth state parametra (V9)
    → Token u projects.meta_access_token
    → ig_connected = true
+   → Detektira promjenu IG accounta (V9)
    → Queue: q_ingest.add("instagram.ingest")
 
 2. instagramIngest (worker na Railway)
@@ -409,26 +413,53 @@ MinIO relative path                → APP_URL/vissocial/{path}
 | Database | Neon | PostgreSQL, zahtijeva SSL |
 | Redis | Railway | BullMQ queue backend |
 | Storage | Vercel Blob | Slike, renderovi |
-| Image Gen | fal.ai | Flux2, max 4 image_urls |
+| Image Gen | fal.ai | Flux2, max 4 image_urls, safety checker OFF |
 
-### 9.2 Railway Environment Variables (OBAVEZNO)
+### 9.2 Environment Variables
 
+**Vercel (Frontend):**
 ```env
+NODE_ENV=production
+NEXT_PUBLIC_APP_NAME=Vissocial
+APP_URL=https://vissocial.vercel.app
+META_REDIRECT_URI=https://vissocial.vercel.app/api/instagram/callback
 DATABASE_URL=postgresql://...@...neon.tech/neondb?sslmode=require
 REDIS_URL=redis://default:...@switchyard.proxy.rlwy.net:54046
 OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
 FAL_KEY=...
-BLOB_READ_WRITE_TOKEN=vercel_blob_...    # MORA biti isti kao na Vercel!
-APP_URL=https://vissocial.vercel.app     # BEZ trailing slasha!
-DEV_GENERATE_LIMIT=3                      # Za testiranje (default 30)
-NODE_ENV=production
+FAL_FLUX_MODEL=flux/dev
 FAL_FLUX_EDIT_MODEL=flux-2/edit
+BLOB_READ_WRITE_TOKEN=vercel_blob_...
+META_APP_ID=...
+META_APP_SECRET=...
+FREE_WATERMARK_TEXT=Made with Vissocial
+FREE_CAPTION_FOOTER=-\nMade with @vissocial\n
+```
+
+**Railway (Worker):**
+```env
+APP_URL=https://vissocial.vercel.app
+DATABASE_URL=postgresql://...@...neon.tech/neondb?sslmode=require
+REDIS_URL=redis://default:...@switchyard.proxy.rlwy.net:54046
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+FAL_KEY=...
+FAL_FLUX_MODEL=flux/dev
+FAL_FLUX_EDIT_MODEL=flux-2/edit
+BLOB_READ_WRITE_TOKEN=vercel_blob_...
+META_APP_ID=...
+META_APP_SECRET=...
+NODE_ENV=production
+DEV_GENERATE_LIMIT=3
 ```
 
 **KRITIČNO:**
 - `BLOB_READ_WRITE_TOKEN` mora biti na OBJE platforme (Vercel + Railway)
 - `APP_URL` mora biti BEZ trailing slasha i BEZ newline/razmaka
-- `DEV_GENERATE_LIMIT` radi samo na Railway (worker), ne na Vercel
+- `DATABASE_URL` mora imati `?sslmode=require` na obje platforme
+- `META_APP_ID` i `META_APP_SECRET` moraju biti postavljeni na Railway (ne "replace_me"!)
+- Credentials referenca: `C:\Users\Velo\source\vissocial_chat\.credentials\vissocial-credentials.md`
 
 ### 9.3 SSL za Neon (db.ts)
 
@@ -441,16 +472,14 @@ export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig })
 ### 9.4 Vercel API Routes — force-dynamic
 
 ```typescript
-// OBAVEZNO na svim API routama koje čitaju iz baze:
 export const dynamic = "force-dynamic";
 ```
 
-Bez toga Vercel kešira response na build-u i nikad ne osvježi podatke.
-
-### 9.5 fal.ai Ograničenja
+### 9.5 fal.ai Konfiguracija
 
 ```typescript
 const FAL_MAX_IMAGE_URLS = 4;  // fal.ai limit
+enable_safety_checker: false    // V9: isključen jer blokira product slike
 // prioritizeRefs(): 1 product → 1 style → 1 character → fill remaining
 ```
 
@@ -478,6 +507,9 @@ TRUNCATE
   brand_profiles, assets, user_actions
 CASCADE;
 
+-- V9: Za brisanje svih projekata:
+DELETE FROM projects WHERE id != 'proj_local';
+-- Ili za reset specifičnog projekta:
 UPDATE projects 
 SET meta_access_token = NULL, ig_user_id = NULL, ig_connected = false 
 WHERE id = 'proj_local';
@@ -489,18 +521,7 @@ Invoke-RestMethod -Method POST -Uri "https://vissocial.vercel.app/api/debug/clea
 ```
 
 **3. Otvori Incognito prozor** → `https://vissocial.vercel.app`
-
-**4. Provjeri pipeline nakon ingesta:**
-```powershell
-Invoke-RestMethod -Uri "https://vissocial.vercel.app/api/debug/pipeline-status" | ConvertTo-Json -Depth 10
-```
-
-**5. Provjeri URL-ove u bazi:**
-```sql
-SELECT id, LEFT(url, 80) FROM assets LIMIT 3;
--- Mora biti: https://tdtglu5leenek1zg.public.blob.vercel-storage.com/...
--- NE: https://vissocial.vercel.app/vissocial/...
-```
+(Incognito nema cookie → novi projekt automatski)
 
 ---
 
@@ -508,17 +529,19 @@ SELECT id, LEFT(url, 80) FROM assets LIMIT 3;
 
 ### Chat
 ```
-POST /api/chat/session          - Nova sesija
+POST /api/chat/session          - Nova sesija (koristi getProjectId())
 GET  /api/chat/session          - Učitaj sesiju
 POST /api/chat/message          - Pošalji poruku (FSM)
 GET  /api/chat/notifications    - Poll notifikacije
 POST /api/chat/notifications    - Označi pročitano
-POST /api/chat/reset            - Reset sesije i projekta
+POST /api/chat/reset            - "Nova sesija" — kreira novi projekt + cookie
 ```
 
-### Analyze (V3)
+### Instagram
 ```
-POST /api/analyze               - Dvofazna brand analiza (scrape + GPT)
+GET  /api/instagram/login       - OAuth start (project_id u state param)
+GET  /api/instagram/callback    - OAuth callback (čita project_id iz state)
+POST /api/instagram/scrape      - Web scraping profila
 ```
 
 ### Content
@@ -528,11 +551,9 @@ GET  /api/content/item          - Dohvati pojedini item
 PATCH /api/content/item         - Update item
 ```
 
-### Instagram
+### Analyze (V3)
 ```
-GET  /api/instagram/login       - OAuth start
-GET  /api/instagram/callback    - OAuth callback
-POST /api/instagram/scrape      - Web scraping profila
+POST /api/analyze               - Dvofazna brand analiza (scrape + GPT)
 ```
 
 ### Debug (SAMO za development)
@@ -546,39 +567,30 @@ POST /api/debug/clean-old-packs - Briše stare packove
 
 ## 12. POZNATI BUGOVI I FIXES (POVIJEST)
 
-### V1-V6 Fixes (sažetak)
-- ✅ planGenerate column error (`arm_id` → `id`)
-- ✅ BullMQ lockDuration (30s → 60s+)
-- ✅ Notification sustav
-- ✅ Duplicate messages fix
-- ✅ OAuth redirect loop
-- ✅ Reset API column (`ig_access_token` → `meta_access_token`)
-
-### V7 Fixes
-- ✅ Database: `assets.external_id` kolona
-- ✅ Database: `detected_products.analysis_id` i `source` kolone
-- ✅ Storage: `allowOverwrite: true` za Vercel Blob
-- ✅ Product confirm: zelena kvačica nakon potvrde
+### V9 — Multi-User & Dynamic Project ID (25. veljače 2026)
+- ✅ **Dynamic project_id:** Cookie-based izolacija korisnika (`vissocial_pid`)
+- ✅ **`src/lib/projectId.ts`:** getProjectId(), readProjectId(), setProjectIdCookie(), ensureProject()
+- ✅ **19 API ruta migrirano:** Sve koriste getProjectId() umjesto hardkodiranog `proj_local`
+- ✅ **"Nova sesija" gumb:** Kreira novi projekt, postavlja novi cookie
+- ✅ **Instagram reconnect:** Detektira promjenu IG accounta, čisti stare podatke
+- ✅ **OAuth state param:** project_id putuje kroz OAuth flow
+- ✅ **Migration tracking:** `_migrations` tablica, `npm run migrate` preskače primijenjene
+- ✅ **Assets unique index:** Per-project umjesto globalnog (`idx_assets_project_external_id`)
+- ✅ **Worker dotenv:** `import 'dotenv/config'` za lokalni dev
+- ✅ **Worker port:** `PORT || 3001` (izbjegava konflikt s Next.js na 3000)
+- ✅ **fal.ai safety checker:** Isključen (`enable_safety_checker: false`)
+- ✅ **scheduleTick return type:** `return {} as ScheduleTickResult`
 
 ### V8 — Production Deployment Fixes (24. veljače 2026)
-- ✅ **SSL za Neon:** `db.ts` — Pool bez SSL config → dodana SSL konfiguracija
-- ✅ **fal.ai limit:** `renderFlux.ts` — 5 referenci → max 4 s `prioritizeRefs()`
-- ✅ **Vercel caching:** `content/latest/route.ts` — dodano `export const dynamic = "force-dynamic"`
-- ✅ **Storage URL bug:** `instagramIngest.ts` — `makePublicUrl(s3Key)` → `makePublicUrl(uploadedUrl)`
-- ✅ **APP_URL trailing slash:** Railway varijabla imala razmak/newline → očišćeno
-- ✅ **BLOB_READ_WRITE_TOKEN:** Nedostajao na Railway → dodan
-- ✅ **Missing DB columns:** `chat_notifications.project_id`, `instagram_analyses.created_at`, `instagram_analyses.project_id` → dodani ALTER TABLE
-- ✅ **Redis monitoring:** Dodan ioredis za connection monitoring u worker.ts
-- ✅ **BullMQ lock duration:** Render queue povećan na 180s za fal.ai
-- ✅ **Worker logging:** Logger uključen u produkciji (bio isključen)
-- ✅ **Health check:** `/health` endpoint za monitoring
+- ✅ SSL za Neon, fal.ai limit, Vercel caching, Storage URL bug
+- ✅ APP_URL trailing slash, BLOB_READ_WRITE_TOKEN, Missing DB columns
+- ✅ Redis monitoring, BullMQ lock duration, Worker logging, Health check
 
-### V3 Design System Migration
-- ✅ Novi design system komponente (ChatBubble, ChatLayout, etc.)
-- ✅ Dvoslojna navigacija (ChatLayout + AppHeader)
-- ✅ Profile Analysis stranica (/analyze/[handle])
-- ✅ Lavender gradient pozadina
-- ✅ AI avatar (sparkle, NE robot)
+### V7 Fixes
+- ✅ Database kolone, Storage allowOverwrite, Product confirm zelena kvačica
+
+### V3 Design System
+- ✅ ChatBubble, ChatLayout, Profile Analysis, Lavender gradient, AI sparkle avatar
 
 ---
 
@@ -590,15 +602,17 @@ Prije svakog odgovora:
 - [ ] Provjeri odgovara li database schema (TOČNA IMENA KOLONA!)
 - [ ] Generiraj KOMPLETNE datoteke, ne snippete
 - [ ] Redis port = **6380** (lokalno)
-- [ ] Project ID = **"proj_local"**
+- [ ] Project ID = **dinamički via `getProjectId()`** (NE hardkodirani "proj_local"!)
 - [ ] Token kolona = **meta_access_token** (NE ig_token!)
 - [ ] IG user kolona = **ig_user_id** (NE meta_user_id!)
 - [ ] IG connected kolona = **ig_connected** (boolean)
 - [ ] Storage: **allowOverwrite: true** za Vercel Blob
 - [ ] Storage: koristi **uploadedUrl** (NE s3Key) za makePublicUrl u produkciji
 - [ ] API routes: dodaj `export const dynamic = "force-dynamic"` za DB queries
-- [ ] fal.ai: max **4 image_urls** po requestu
+- [ ] fal.ai: max **4 image_urls** po requestu, **safety checker OFF**
 - [ ] APP_URL: **BEZ trailing slasha**
+- [ ] Nove API rute: koristi `import { getProjectId } from "@/lib/projectId"`
+- [ ] Instagram zahtijeva **Professional/Creator** account (ne Personal)
 
 ---
 
@@ -606,24 +620,25 @@ Prije svakog odgovora:
 
 ### Kratkoročno
 - [ ] DEV_GENERATE_LIMIT enforcement (trenutno ne radi pouzdano)
-- [ ] Proper database migration system (umjesto ručnih ALTER TABLE)
 - [ ] Error handling poboljšanja na /analyze stranici
+- [ ] Credential rotation (keyevi dijeljeni u chatu)
 
 ### Srednjoročno
 - [ ] Multi-image upload
 - [ ] Cleanup: obrisati Card.tsx, Badge.tsx ako se ne koriste
 - [ ] Production monitoring (alerts za failed jobs)
 - [ ] Rate limiting na API endpoints
+- [ ] /profile stranica s brand editing
 
 ### Dugoročno
 - [ ] Shopify integration
 - [ ] Automatic scheduling
 - [ ] A/B testing za content
-- [ ] Multi-tenant auth
+- [ ] Proper auth sustav (zamjena za cookie-based project isolation)
 
 ---
 
 **KRAJ DOKUMENTA**
 
 *Ovaj dokument je autoritativan izvor znanja o Vissocial projektu.*
-*Zadnje ažuriranje: 24. veljače 2026 — V8 Production Deployment Fixes*
+*Zadnje ažuriranje: 25. veljače 2026 — V9 Multi-User & Dynamic Project ID*

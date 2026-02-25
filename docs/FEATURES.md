@@ -1,6 +1,31 @@
 # Vissocial — Features Documentation
 
-> Zadnje ažuriranje: 24. veljače 2026 — V8 Production Deployment
+> Zadnje ažuriranje: 25. veljače 2026 — V9 Multi-User Support
+
+## Multi-User / Project Isolation (V9)
+
+### How It Works
+- Each user gets an isolated project via `vissocial_pid` cookie (httpOnly, 30 days)
+- No auth system — cookie-based isolation for testing with multiple users
+- `src/lib/projectId.ts` provides: `getProjectId()`, `readProjectId()`, `setProjectIdCookie()`, `ensureProject()`
+- All 19 API routes use `getProjectId()` instead of hardcoded "proj_local"
+
+### "Nova sesija" Button
+- Creates brand new project (proj_XXXXXXXXXXXX) with new cookie
+- Old project stays in DB untouched (orphaned)
+- Instagram disconnected, clean onboarding starts fresh
+
+### Instagram Account Change Detection
+- OAuth callback compares new ig_user_id with existing
+- Same account → refresh token only, keep data
+- Different account → clean old IG-sourced data (assets, analyses, products, content packs)
+
+### Database Migration System
+- Tracking table: `_migrations` (name, applied_at)
+- Script: `npm run migrate` (`src/lib/sql.ts`)
+- Skips already-applied migrations, runs only new ones
+- Migration files: `src/db/migrations/001_complete_schema.sql`, etc.
+- Production: Neon SQL Editor or `$env:DATABASE_URL="neon_url"; npm run migrate`
 
 ## Profile Analysis (/analyze/[handle])
 
@@ -38,6 +63,15 @@
 | `file_upload` | Opens file picker |
 | `asset_delete` | Confirm dialog + API delete |
 
+### Init Chips (V9)
+```typescript
+chips: [
+  { type: "navigation", label: "Spoji Instagram", href: "/settings" },
+  { type: "onboarding_option", label: "Nastavi bez Instagrama", value: "nastavi bez" }
+]
+```
+**Note:** "Spoji Instagram" is `navigation` type (not `suggestion`), directs to Settings page.
+
 ### Notifications (Async)
 - Frontend polls `GET /api/chat/notifications` every 5s
 - Worker pushes notifications after: ingest, analyze, brand rebuild, plan generate, render complete
@@ -45,13 +79,20 @@
 
 ## Instagram Integration
 
-### OAuth Flow
-1. User clicks "Spoji Instagram" chip
-2. Redirect to `/api/instagram/login` → Meta OAuth
-3. Callback at `/api/instagram/callback`
-4. Token saved to `projects.meta_access_token`
-5. `ig_connected` set to true
-6. Queue: `instagram.ingest` job
+### Requirements
+- Instagram account must be **Professional** (Business or Creator) — Personal accounts cannot use Graph API
+- Meta prompts user to convert if Personal account detected
+
+### OAuth Flow (V9)
+1. User clicks "Spoji Instagram" chip → navigates to /settings
+2. Settings page redirects to `/api/instagram/login`
+3. Login route includes `project_id` in OAuth state parameter
+4. Meta OAuth flow (user authorizes)
+5. Callback at `/api/instagram/callback` reads project_id from state
+6. Token saved to `projects.meta_access_token`
+7. `ig_connected` set to true
+8. If different IG account than before → clean old data
+9. Queue: `instagram.ingest` job
 
 ### Media Ingest Pipeline
 1. Fetch media via Graph API (limit 25)
@@ -83,6 +124,7 @@
 ### Image Rendering (fal.ai Flux2)
 - Model: `flux-2/edit` (with reference images) or `flux/dev` (without)
 - **Max 4 image_urls per request** (fal.ai hard limit)
+- **Safety checker disabled** (`enable_safety_checker: false`) — prevents false positives on product images
 - Priority: 1 product → 1 style → 1 character → fill remaining slot
 - Smart prompt includes scene, product fidelity instructions, photography style
 - Lock duration: 180s (fal.ai can be slow)
@@ -109,6 +151,9 @@
 
 ### Worker Deployment (Railway)
 - Single Node.js process running all workers
+- `import 'dotenv/config'` at top for local .env loading
+- Default port 3001 locally (avoids conflict with Next.js on 3000)
+- Railway sets PORT automatically
 - Redis connection monitoring via ioredis
 - Auto-reconnect on ECONNRESET
 - Queue event listeners for failed/stalled jobs
@@ -144,7 +189,7 @@ export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig })
 ### Projects Table — Exact Column Names
 | Column | Type | Note |
 |--------|------|------|
-| id | TEXT | Primary key |
+| id | TEXT | Primary key (V9: dynamic "proj_XXXXXXXXXXXX") |
 | meta_access_token | TEXT | IG OAuth token (NOT ig_token!) |
 | ig_user_id | TEXT | Instagram user ID |
 | ig_connected | BOOLEAN | Connection status |
@@ -153,6 +198,13 @@ export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig })
 | meta_token_expires_at | TIMESTAMPTZ | Token expiry |
 
 **IMPORTANT:** Columns `ig_token`, `meta_user_id`, `ig_username` do NOT exist!
+
+### Assets Unique Constraint (V9)
+```sql
+-- Per-project uniqueness (NOT global!)
+CREATE UNIQUE INDEX idx_assets_project_external_id 
+  ON assets(project_id, external_id) WHERE external_id IS NOT NULL;
+```
 
 ## Debug & Monitoring
 
@@ -163,7 +215,7 @@ export const pool = new Pool({ connectionString: config.dbUrl, ssl: sslConfig })
 - `GET /health` — Basic health check
 
 ### Full Reset Procedure
-See VISSOCIAL_COMPLETE_CONTEXT_V3.md Section 10 for complete reset SQL and steps.
+See CONTEXT.md Section 10 for complete reset SQL and steps.
 
 ## Design System
 
