@@ -4,17 +4,18 @@
 
 Chat-first interface for Instagram content generation with Vision AI analysis, RL-based optimization, and automated publishing.
 
-> **Version:** 3.0 (February 2026)
-> **Branch:** `feature/design_initial`
+> **Version:** 9.0 (February 2026)
+> **Branch:** `main` (production)
+> **Live:** [vissocial.vercel.app](https://vissocial.vercel.app)
 
 ## Tech Stack
 
-- **Frontend:** Next.js 14, TypeScript, Tailwind CSS
-- **Backend:** Next.js API Routes, BullMQ workers
-- **Database:** PostgreSQL
+- **Frontend:** Next.js 14, TypeScript, Tailwind CSS → **Vercel**
+- **Backend:** Next.js API Routes, BullMQ workers → **Railway**
+- **Database:** PostgreSQL → **Neon** (SSL required)
 - **Storage:** MinIO (local) / Vercel Blob (production)
 - **AI:** GPT-4 Vision, GPT-4o-mini, ChatGPT, fal.ai (Flux2)
-- **Queue:** BullMQ + Redis
+- **Queue:** BullMQ + Redis → **Railway Redis**
 
 ## Features
 
@@ -22,12 +23,12 @@ Chat-first interface for Instagram content generation with Vision AI analysis, R
 
 **Core**
 - **Chat-first UX** — Onboarding, commands, notifications all in chat
-- **Instagram OAuth** — Connect professional/business accounts
+- **Instagram OAuth** — Connect professional/creator accounts
 - **Vision Analysis** — GPT-4 Vision analyzes Instagram posts
-- **Product Detection** — Auto-detect products from images
+- **Product Detection** — Auto-detect products with confirm/reject chips
 - **Brand Profile** — Aggregated style analysis (colors, mood, patterns)
 - **Content Generation** — AI generates topics, captions, visual directions
-- **Image Rendering** — Flux2 via fal.ai creates preview images
+- **Image Rendering** — Flux2 via fal.ai (max 4 refs, safety checker disabled)
 - **Calendar/Editor** — View, edit, approve, schedule posts
 - **Export** — CSV + ZIP bundle
 - **RL Loop** — Thompson sampling policy for content optimization
@@ -38,24 +39,36 @@ Chat-first interface for Instagram content generation with Vision AI analysis, R
 - **Modern UI** — ChatBubble, ChatLayout, Button, Card, Chip components
 - **AI Avatar** — Sparkle/star design (not robot)
 - **Navigation** — Dual-layer (ChatLayout + AppHeader)
-- **Progressive Loading** — Skeleton states, staggered fade-in animations
 
-**V7 — Fixes**
+**V7 — Database & Storage**
 - **Product Confirm UI** — Green checkmark after confirmation
 - **Storage Fix** — Vercel Blob allowOverwrite for re-ingest
-- **Database Fix** — external_id, analysis_id columns
+- **Database Fix** — external_id, analysis_id, source columns
 
-### 🚧 In Progress
+**V8 — Production Deployment**
+- **Neon PostgreSQL** — SSL configuration, connection pooling
+- **Railway Worker** — BullMQ with Redis monitoring, auto-reconnect
+- **Vercel Blob** — Hybrid storage with auto-detection
+- **fal.ai** — Max 4 image_urls with prioritizeRefs()
+- **Debug Endpoints** — Pipeline status, failed job cleanup, health check
+- **force-dynamic** — All DB-reading API routes cached correctly
 
-- Polish & cleanup
-- Profile screen enhancement
-- Toast notifications
+**V9 — Multi-User Support**
+- **Dynamic Project ID** — Cookie-based isolation (`vissocial_pid`)
+- **19 API routes migrated** — All use `getProjectId()` instead of hardcoded `proj_local`
+- **Instagram reconnect** — Detects account changes, cleans old data
+- **OAuth state param** — project_id travels through OAuth flow
+- **"Nova sesija" button** — Creates new project + cookie
+- **Migration tracking** — `_migrations` table, `npm run migrate` skips applied
+- **Per-project unique index** — Assets deduplicated per project
 
 ### 📋 Planned
 
+- Shopify integration
 - Multi-platform support (TikTok, Facebook)
 - Video generation (Luma/Runway)
-- Real posting scheduler UI
+- Proper auth system (replace cookie-based isolation)
+- A/B testing for content
 
 ## Quick Start
 
@@ -73,109 +86,91 @@ npm run migrate
 
 # 4. Run
 npm run dev     # Frontend (localhost:3000)
-npm run worker  # Background jobs
+npm run worker  # Background jobs (localhost:3001)
 ```
 
 ## Environment Variables
 
+### Local Development (.env)
 ```env
-# Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/vissocial
-
-# Redis (BullMQ) — NOTE: port 6380!
 REDIS_URL=redis://localhost:6380
-
-# Storage - Local (MinIO)
 S3_ENDPOINT=http://localhost:9100
 S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
 S3_BUCKET=vissocial
-
-# Storage - Production (Vercel Blob)
-BLOB_READ_WRITE_TOKEN=vercel_blob_...
-
-# AI
 OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
 FAL_KEY=...
-
-# Instagram
+FAL_FLUX_MODEL=flux/dev
+FAL_FLUX_EDIT_MODEL=flux-2/edit
 META_APP_ID=...
 META_APP_SECRET=...
 APP_URL=https://your-ngrok-url.ngrok-free.dev
-
-# Optional
-ENABLE_INSTAGRAM_PUBLISH=false
 DEV_GENERATE_LIMIT=3
-POLICY_URL=http://localhost:8001
 ```
+
+### Production
+See `docs/CONTEXT.md` for full Vercel + Railway environment variable lists.
+
+**Critical production notes:**
+- `BLOB_READ_WRITE_TOKEN` must be on BOTH Vercel and Railway
+- `APP_URL` must have NO trailing slash
+- `DATABASE_URL` must include `?sslmode=require`
 
 ## User Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      VISSOCIAL USER JOURNEY                      │
-└─────────────────────────────────────────────────────────────────┘
-
 [Landing Page] → Enter @handle
        │
        ▼
 [Step 1: Profile Analysis] (/analyze/[handle])
        │   GPT-4o-mini brand analysis
-       │   USP, tone, audience, recommendations
        │
        ▼
-[Step 2: Connect Instagram] (/chat)
-       │   OAuth or manual flow
+[Step 2: Init] (/chat)
+       │   🍪 Cookie → getProjectId() → new project
+       │   [Connect Instagram] or [Continue without]
        │
        ▼
-[Step 3: Tailor 30-Day Plan] (/chat)
-       │   Goal, profile type, focus selection
+[Step 3: Instagram Ingest] (Worker pipeline)
+       │   ingest → analyze (×3) → brandRebuild → notification
        │
        ▼
 [Step 4: Product Confirmation] (/chat)
        │   Confirm/reject detected products
        │
        ▼
-[Step 5: Content Generation] (/chat)
-       │   AI generates plan + renders images
+[Step 5: Onboarding] (/chat)
+       │   Goal, frequency, tone, promo level
        │
        ▼
-[Step 6: Calendar] (/calendar)
+[Step 6: Content Generation] (/chat)
+       │   LLM + fal.ai Flux2 rendering
+       │
+       ▼
+[Step 7: Calendar] (/calendar)
        │   Review, edit, approve, schedule
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       Next.js App                                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │    /     │  │ /analyze │  │  /chat   │  │/calendar │        │
-│  │ Landing  │  │ Analysis │  │   Chat   │  │ Calendar │        │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘        │
-│       │             │             │             │               │
-│  ┌────▼─────────────▼─────────────▼─────────────▼────┐         │
-│  │                  API Routes                        │         │
-│  │  /api/analyze  /api/chat  /api/instagram  /api/*  │         │
-│  └────┬─────────────┬─────────────┬─────────────┬────┘         │
-└───────┼─────────────┼─────────────┼─────────────┼───────────────┘
-        │             │             │             │
-   ┌────▼────┐   ┌────▼────┐   ┌────▼────────────▼───┐
-   │PostgreSQL│   │  Redis  │   │ MinIO / Vercel Blob │
-   └────┬────┘   └────┬────┘   └─────────────────────┘
-        │             │
-        │        ┌────▼────────────────────────────┐
-        │        │        BullMQ Workers           │
-        │        │  ┌────────┐  ┌────────┐        │
-        │        │  │ ingest │  │ render │        │
-        │        │  └────────┘  └────────┘        │
-        │        │  ┌────────┐  ┌────────┐        │
-        └────────┤  │analyze │  │ brand  │        │
-                 │  └────────┘  └────────┘        │
-                 │  ┌────────┐  ┌────────┐        │
-                 │  │  plan  │  │publish │        │
-                 │  └────────┘  └────────┘        │
-                 └────────────────────────────────┘
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Vercel     │     │   Railway     │     │    Neon      │
+│  (Frontend)  │────▶│  (Worker)     │────▶│ (PostgreSQL) │
+│  Next.js API │     │  BullMQ jobs  │     │  SSL req.    │
+└─────────────┘     └──────────────┘     └─────────────┘
+       │                    │
+       │                    ▼
+       │            ┌──────────────┐
+       │            │ Railway Redis│
+       │            └──────────────┘
+       ▼
+┌─────────────┐     ┌──────────────┐
+│ Vercel Blob │     │   fal.ai     │
+│  (Storage)  │     │  (Flux2)     │
+└─────────────┘     └──────────────┘
 ```
 
 ## Project Structure
@@ -183,100 +178,96 @@ POLICY_URL=http://localhost:8001
 ```
 src/
 ├── app/
-│   ├── globals.css          # Design tokens + Tailwind
-│   ├── layout.tsx           # Root layout + AppHeader
 │   ├── page.tsx             # Landing page
-│   ├── analyze/
-│   │   └── [handle]/        # Profile analysis
+│   ├── analyze/[handle]/    # Profile analysis
 │   ├── chat/                # Chat interface
 │   ├── calendar/            # Content calendar
 │   ├── profile/             # Brand profile
 │   └── settings/            # Instagram connection
 ├── ui/                      # Design system components
-│   ├── ChatBubble.tsx
-│   ├── ChatLayout.tsx
-│   ├── AppHeader.tsx
-│   ├── Button.tsx
-│   ├── Card.tsx
-│   ├── Chip.tsx
-│   ├── Avatar.tsx
-│   ├── Icons.tsx
-│   └── Input.tsx
-├── lib/                     # Utilities
-│   ├── config.ts
-│   ├── db.ts
-│   ├── storage.ts
-│   └── notifications.ts
+│   ├── ChatBubble.tsx       # Messages, chips, avatars
+│   ├── ChatLayout.tsx       # Chat page layout
+│   ├── AppHeader.tsx        # App navigation
+│   ├── Button.tsx, Card.tsx, Chip.tsx
+│   ├── Avatar.tsx, Icons.tsx, Input.tsx
+│   ├── ColorPicker.tsx, MultiSelect.tsx
+│   └── ProgressBar.tsx, ProductCard.tsx
+├── lib/
+│   ├── projectId.ts         # V9: Cookie-based project isolation
+│   ├── config.ts, db.ts, storage.ts
+│   └── notifications.ts, fal.ts
+├── db/
+│   └── migrations/          # SQL migrations
 └── server/
-    └── processors/          # BullMQ workers
+    ├── worker.ts            # BullMQ worker entry
+    └── processors/          # Job processors
 ```
-
-## Database Schema
-
-### Core Tables
-- `projects` — Multi-tenant projects
-- `brand_profiles` — Aggregated brand analysis
-- `assets` — Images/videos (+ external_id for dedup)
-- `products` — Confirmed products
-
-### Content Tables
-- `content_packs` — Monthly content plans
-- `content_items` — Individual posts
-- `renders` — fal.ai render outputs
-
-### Analysis Tables
-- `instagram_analyses` — Vision API results
-- `detected_products` — Auto-detected products (+ analysis_id, source)
-- `brand_rebuild_events` — Async rebuild tracking
-
-### Chat Tables
-- `chat_sessions` — User chat sessions (FSM state)
-- `chat_messages` — Message history
-- `chat_notifications` — Async worker notifications
 
 ## API Reference
 
-### Analyze (V3 — NEW)
-- `POST /api/analyze` — Two-phase brand analysis (scrape + GPT)
-
 ### Chat
 - `POST /api/chat/session` — Create session
-- `GET /api/chat/session?session_id=X` — Load session
+- `GET /api/chat/session` — Load session
 - `POST /api/chat/message` — Send message (FSM)
-- `GET /api/chat/notifications?session_id=X` — Poll notifications
-- `POST /api/chat/reset` — Reset session
+- `GET /api/chat/notifications` — Poll notifications
+- `POST /api/chat/notifications` — Mark read
+- `POST /api/chat/reset` — New session (new project + cookie)
 
 ### Instagram
-- `GET /api/instagram/login` — Start OAuth
+- `GET /api/instagram/login` — Start OAuth (project_id in state)
 - `GET /api/instagram/callback` — OAuth callback
 - `POST /api/instagram/scrape` — Web scraping
 
 ### Content
-- `GET /api/content/latest` — Get latest content pack
-- `GET /api/content/item?item_id=X` — Get single item
+- `GET /api/content/latest` — Latest content pack
+- `GET /api/content/item` — Single item
 - `PATCH /api/content/item` — Update item
+- `POST /api/content/regenerate` — Regenerate
 
 ### Products
-- `POST /api/products/confirm` — Confirm detected product
-- `POST /api/products/reject` — Reject detected product
+- `GET /api/products` — List products
+- `GET /api/products/pending` — Pending products
+- `POST /api/products/confirm` — Confirm product
+- `POST /api/products/reject` — Reject product
+- `PATCH /api/products/[id]` — Update (name, category, locked)
+- `DELETE /api/products/[id]` — Delete product
 
 ### Profile
-- `GET /api/profile` — Get brand profile
+- `GET /api/profile` — Brand profile + metadata
 - `PATCH /api/profile` — Update brand profile
 - `POST /api/profile/rebuild` — Trigger rebuild
 
+### Assets
+- `POST /api/assets/upload` — Upload (FormData: file + label)
+- `GET /api/assets/references` — Reference images by type
+- `POST /api/assets/presign` — Presigned URL
+- `DELETE /api/assets/[id]` — Delete asset
+
+### Analyze
+- `POST /api/analyze` — Two-phase brand analysis
+- `GET /api/analyze/status` — Analysis status
+- `POST /api/analyze/trigger` — Trigger analysis
+
+### Other
+- `POST /api/scrape/website` — Web scraping
+- `POST /api/export` — ZIP export (CSV + media)
+- `GET /api/projects/me` — Current project info
+- `GET /api/debug/pipeline-status` — Queue status
+- `GET /health` — Health check
+
 ## Worker Jobs
 
-| Queue | Job | Description |
-|-------|-----|-------------|
-| q_ingest | instagram.ingest | Fetch Instagram media |
-| q_analyze | analyze.instagram | Vision API analysis |
-| q_brand_rebuild | brand.rebuild | Aggregate brand profile |
-| q_llm | plan.generate | Generate content plan |
-| q_render | render.flux | Render images via fal.ai |
-| q_publish | schedule.tick | Check scheduled posts |
-| q_publish | publish.instagram | Publish to Instagram |
-| q_metrics | metrics.ingest | Pull performance metrics |
+| Queue | Job | Concurrency | Lock |
+|-------|-----|-------------|------|
+| q_ingest | instagram.ingest | 1 | 60s |
+| q_analyze | analyze.instagram | 3 | 90s |
+| q_brand_rebuild | brand.rebuild | 1 | 60s |
+| q_llm | plan.generate | 1 | 120s |
+| q_render | render.flux | 3 | 180s |
+| q_export | export.pack | 1 | 60s |
+| q_publish | schedule.tick | 3 | 60s |
+| q_publish | publish.instagram | 3 | 60s |
+| q_metrics | metrics.ingest | 1 | 60s |
 
 ## Development Notes
 
@@ -287,55 +278,64 @@ ngrok http 3000
 # Update APP_URL in .env
 ```
 
-### Redis Port
-Default is **6380** (not 6379) to avoid conflicts.
+### Key Ports
+- **Next.js:** 3000
+- **Worker:** 3001 (avoids conflict)
+- **Redis:** 6380 (not 6379!)
+- **MinIO:** 9100
 
 ### Storage
 - **Local:** MinIO on port 9100
 - **Production:** Vercel Blob (auto-detected via BLOB_READ_WRITE_TOKEN)
 - **Important:** `allowOverwrite: true` required for re-ingest
+- **Critical:** Use `makePublicUrl(uploadedUrl)` not `makePublicUrl(s3Key)`
 
 ### Project ID
-Hardcoded as `proj_local` for development.
+Dynamic via cookie `vissocial_pid`. All routes use `getProjectId()`.
+
+### Database Migrations
+```bash
+npm run migrate  # Skips already-applied migrations via _migrations table
+```
 
 ## Changelog
+
+### v9.0.0 (2026-02-25)
+- ✅ Multi-user support — Cookie-based project isolation
+- ✅ 19 API routes migrated to dynamic project_id
+- ✅ Instagram reconnect detection
+- ✅ Migration tracking system
+- ✅ fal.ai safety checker disabled (false positives on product images)
+
+### v8.0.0 (2026-02-24)
+- ✅ Production deployment — Vercel + Railway + Neon
+- ✅ SSL configuration for Neon PostgreSQL
+- ✅ Storage URL fix (Vercel Blob passthrough)
+- ✅ Redis monitoring with auto-reconnect
+- ✅ Debug endpoints for pipeline monitoring
+
+### v7.0.0 (2026-02-07)
+- ✅ Product confirm green checkmark
+- ✅ Database columns: external_id, analysis_id, source
+- ✅ Vercel Blob allowOverwrite fix
 
 ### v3.0.0 (2026-02-07)
 - ✅ Design System Migration (Contently-style)
 - ✅ Profile Analysis page (/analyze/[handle])
-- ✅ Dual-layer navigation (ChatLayout + AppHeader)
-- ✅ Modern UI components (ChatBubble, Avatar, etc.)
-- ✅ Lavender gradient background
-- ✅ AI sparkle avatar (not robot)
-- ✅ Progressive loading animations
-
-### v2.7.0 (2026-02-07)
-- ✅ Product confirm visual feedback (green checkmark)
-- ✅ Init step simplification (2 options only)
-- ✅ Database: assets.external_id column
-- ✅ Database: detected_products.analysis_id + source
-- ✅ Storage: Vercel Blob allowOverwrite fix
-- ✅ End-to-end pipeline verification
+- ✅ Modern UI components
 
 ### v2.0.0 (2026-02-02)
 - ✅ Async notifications system
-- ✅ ChatChip component with icons
-- ✅ Worker lock duration fix (60s)
-- ✅ planGenerate column name fix
+- ✅ Worker lock duration fix
 
 ### v1.0.0
-- Initial release
-- Chat onboarding
-- Instagram OAuth
-- Vision analysis
-- Content generation
-- Calendar UI
+- Initial release — Chat, OAuth, Vision, Content Generation, Calendar
 
 ## Documentation
 
-- [FEATURES.md](docs/FEATURES.md) — Detailed feature documentation
+- [CONTEXT.md](docs/CONTEXT.md) — Complete project context (authoritative source)
+- [FEATURES.md](docs/FEATURES.md) — Feature documentation
 - [ROADMAP.md](docs/ROADMAP.md) — Development roadmap
-- [CONTEXT.md](CONTEXT.md) — AI development context
 
 ## License
 
